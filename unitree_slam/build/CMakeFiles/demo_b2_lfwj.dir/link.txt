@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/demo_b2_lfwj.dir/unitree_slam_example/demo_b2_lfwj.cpp.o -o demo_b2_lfwj   -L/usr/local/lib/aarch64  -Wl,-rpath,/usr/local/lib/aarch64 -lunitree_ros2_idl_cpp /usr/local/lib/aarch64/libunitree_sdk2.a -lddsc -lddscxx 

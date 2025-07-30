@@ -237,7 +237,10 @@ class HikvisionISAPI:
 if __name__ == "__main__":
     cam = HikvisionISAPI("192.168.1.64", "admin", "Robotdog1")
     # 示例：云台向右移动 2 秒并停止
-    # cam.ptz_move(pan=30)
-    # time.sleep(2)
-    # cam.ptz_move(stop=True)
+    #cam.ptz_move(pan=30)
+    cam.ptz_move(zoom=10)
+    time.sleep(20)
+    cam.ptz_move(stop=True)
     cam.preview_rgb_ir()
+
+# wheeltec@wheeltec:~/code/go2_ros2_sdk$ 

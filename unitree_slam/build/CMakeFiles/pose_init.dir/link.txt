@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/pose_init.dir/unitree_slam_example/pose_init.cpp.o -o pose_init   -L/usr/local/lib/aarch64  -Wl,-rpath,/usr/local/lib/aarch64 -lunitree_ros2_idl_cpp /usr/local/lib/aarch64/libunitree_sdk2.a -lddsc -lddscxx 

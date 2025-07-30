@@ -1,0 +1,16 @@
+# ROS2 dependencies (should be installed via apt)
+# ros-humble-sensor-msgs
+# ros-humble-std-msgs
+# ros-humble-unitree-interfaces
+
+# Python dependencies for point cloud visualization
+numpy>=1.21.0
+open3d>=0.17.0
+sensor_msgs_py>=0.0.1
+
+# Optional: for better performance and PCD handling
+# opencv-python>=4.5.0
+# pypcd4>=0.1.0  # Alternative PCD reader/writer
+
+# Optional: for additional visualization tools
+# matplotlib>=3.5.0  # For plotting point cloud statistics 
