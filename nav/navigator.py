@@ -62,13 +62,15 @@ class Navigator(Node):
         # Current pose storage
         self.current_pose = None
         self.pose_lock = threading.Lock()
+        self.last_pose_update_time = 0.0
+        self.pose_timeout = 0.5  # 0.5 seconds timeout for pose data
         
         # Create subscriber for odometry
         self.odometry_subscriber = self.create_subscription(
             Odometry,
             odometry_topic,
             self.odometry_callback,
-            10
+            1
         )
         
         # Point cloud visualization setup
@@ -740,6 +742,7 @@ class Navigator(Node):
                     'euler': (roll, pitch, yaw),
                     'timestamp': msg.header.stamp
                 }
+                self.last_pose_update_time = time.time()
                 
         except Exception as e:
             self.get_logger().error(f"Error processing odometry: {e}")
@@ -754,25 +757,82 @@ class Navigator(Node):
         """
         with self.pose_lock:
             return self.current_pose.copy() if self.current_pose else None
+    
+    def get_realtime_pose(self) -> Optional[dict]:
+        """
+        Get the most recent pose data with timeout check.
+        
+        Returns:
+            Current pose dictionary if data is recent (within timeout),
+            or None if data is stale or unavailable
+        """
+        with self.pose_lock:
+            if self.current_pose is None:
+                return None
+            
+            # Check if pose data is recent enough
+            current_time = time.time()
+            if current_time - self.last_pose_update_time > self.pose_timeout:
+                self.get_logger().warning(f"Pose data is stale (age: {current_time - self.last_pose_update_time:.2f}s)")
+                return None
+            
+            return self.current_pose.copy()
+    
+    def wait_for_fresh_pose(self, timeout: float = 2.0) -> Optional[dict]:
+        """
+        Wait for fresh pose data with specified timeout.
+        
+        Args:
+            timeout: Maximum time to wait in seconds
+            
+        Returns:
+            Fresh pose data or None if timeout
+        """
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            pose = self.get_realtime_pose()
+            if pose is not None:
+                return pose
+            time.sleep(0.1)  # Small delay to avoid busy waiting
+        
+        self.get_logger().warning(f"Timeout waiting for fresh pose data ({timeout}s)")
+        return None
 
-    def add_node_at_current_pose(self, node_name: int, seq: str = "index:123;") -> bool:
+    def add_node_at_current_pose(self, node_name: int, seq: str = "index:123;", use_realtime: bool = True) -> bool:
         """
         Add a navigation node at the current pose from odometry.
         
         Args:
             node_name: Name/ID of the node
             seq: Sequence identifier
+            use_realtime: Whether to use realtime pose data with timeout check
             
         Returns:
             True if node was added successfully, False if no pose data available
         """
-        current_pose = self.get_current_pose()
-        if current_pose is None:
-            self.get_logger().warning("No current pose available from odometry")
-            return False
+        if use_realtime:
+            # Try to get fresh pose data
+            current_pose = self.get_realtime_pose()
+            if current_pose is None:
+                self.get_logger().warning("No fresh pose data available, trying to wait for new data...")
+                current_pose = self.wait_for_fresh_pose(timeout=1.0)
+                if current_pose is None:
+                    self.get_logger().error("Failed to get fresh pose data within timeout")
+                    return False
+        else:
+            # Use any available pose data (original behavior)
+            current_pose = self.get_current_pose()
+            if current_pose is None:
+                self.get_logger().warning("No current pose available from odometry")
+                return False
         
         position = current_pose['position']
         yaw = current_pose['euler'][2]  # Yaw angle
+        
+        # Log pose freshness
+        current_time = time.time()
+        pose_age = current_time - self.last_pose_update_time
+        self.get_logger().info(f"Using pose data (age: {pose_age:.3f}s)")
         
         # Add node using current pose
         self.add_node(node_name, position[0], position[1], position[2], yaw, seq)
