@@ -9,7 +9,7 @@ using keyboard inputs for various navigation operations.
 import rclpy
 import time
 from navigator import Navigator
-
+import threading
 
 class InteractiveNavigator:
     """
@@ -109,6 +109,26 @@ class InteractiveNavigator:
         self.navigator.add_edge(edge_name, start_node, end_node, speed)
         print("✅ Edge added successfully")
         self.edge_counter += 1
+    
+    def add_edge_with_restriction(self):
+        """Add edge with restriction check."""
+        start_node = self.get_int_input("Enter start node ID", 1)
+        end_node = self.get_int_input("Enter end node ID", 2)
+        edge_name = self.get_int_input("Enter edge name/ID", self.edge_counter)
+        speed = self.get_float_input("Enter dog speed", 1.0)
+        
+        # 获取起点和终点位置（这里简化处理，实际应用中需要从节点数据中获取）
+        start_x = self.get_float_input("Enter start X position", 0.0)
+        start_y = self.get_float_input("Enter start Y position", 0.0)
+        end_x = self.get_float_input("Enter end X position", 1.0)
+        end_y = self.get_float_input("Enter end Y position", 1.0)
+        
+        if self.navigator.add_edge_with_restriction_check(edge_name, start_node, end_node, speed, 
+                                                        start_pos=(start_x, start_y), end_pos=(end_x, end_y)):
+            print(f"✅ Edge {edge_name} added successfully")
+            self.edge_counter += 1
+        else:
+            print("❌ Failed to add edge - path intersects restricted area")
     
     def start_navigation(self):
         """Start navigation."""
@@ -226,6 +246,26 @@ class InteractiveNavigator:
         self.navigator.set_downsample_parameters(max_size, voxel_size)
         print("✅ Downsampling parameters updated")
     
+    def start_visualization(self):
+        """Start point cloud visualization."""
+        print("🎬 Starting point cloud visualization...")
+        self.navigator.start_visualization()
+        print("✅ Visualization started")
+    
+    def stop_visualization(self):
+        """Stop point cloud visualization."""
+        print("🛑 Stopping point cloud visualization...")
+        self.navigator.stop_visualization()
+        print("✅ Visualization stopped")
+    
+    def check_visualization_status(self):
+        """Check visualization status."""
+        status = self.navigator.is_visualization_running()
+        print(f"📊 Visualization status: {'🟢 Running' if status else '🔴 Stopped'}")
+        print(f"   Enabled: {self.navigator.enable_visualization}")
+        print(f"   Started: {self.navigator.visualization_started}")
+        print(f"   Running: {self.navigator.visualization_running}")
+    
     def show_help(self):
         """Show help information."""
         print("\n🎮 Interactive Navigator Help")
@@ -250,6 +290,12 @@ class InteractiveNavigator:
         print("  [D] Set Downsample Parameters")
         print("  [H] Show Help")
         print("  [Q] Quit")
+        print("  [NR] Add Node with Restriction Check")
+        print("  [ER] Add Edge with Restriction Check")
+        print("\n🎬 Visualization Control Commands:")
+        print("  [VS] Start Visualization")
+        print("  [VT] Stop Visualization")
+        print("  [VH] Check Visualization Status")
         print("=" * 40)
     
     def process_command(self, command: str):
@@ -314,6 +360,21 @@ class InteractiveNavigator:
         elif command == 'D':
             self.set_downsample_params()
         
+        elif command == 'NR':
+            self.add_edge_with_restriction()
+        
+        elif command == 'ER':
+            self.add_edge_with_restriction()
+        
+        elif command == 'VS':
+            self.start_visualization()
+        
+        elif command == 'VT':
+            self.stop_visualization()
+        
+        elif command == 'VH':
+            self.check_visualization_status()
+        
         elif command == 'H':
             self.show_help()
         
@@ -329,11 +390,18 @@ class InteractiveNavigator:
         try:
             # 主线程里初始化可视化窗口
             self.navigator.start_visualization()
+            
+            # 创建后台线程处理ROS消息
+            def spin_thread():
+                while self.running:
+                    rclpy.spin_once(self.navigator, timeout_sec=0.1)
+            
+            # 启动ROS消息处理线程
+            spin_thread = threading.Thread(target=spin_thread, daemon=True)
+            spin_thread.start()
+            
+            # 主线程处理用户输入
             while self.running:
-                # Process ROS messages
-                rclpy.spin_once(self.navigator, timeout_sec=0.1)
-                
-                # Get user command
                 try:
                     command = input("\nEnter command: ").strip()
                     if command:
