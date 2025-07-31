@@ -79,6 +79,11 @@ class Navigator(Node):
         self.max_cloud_size = 100000  # Maximum number of points before downsampling
         self.downsample_voxel_size = 0.05  # Voxel size for downsampling
         
+        # 可视化状态控制
+        self.visualization_started = False
+        self.visualization_running = False
+        self.visualization_thread = None
+        
         if self.enable_visualization:
             # Create subscriber for point cloud
             self.cloud_subscriber = self.create_subscription(
@@ -95,8 +100,6 @@ class Navigator(Node):
                 self.trajectory_callback,
                 10
             )
-            
-            # 可视化线程
             
             self.get_logger().info(f"📊 Point cloud visualization enabled on topic: {cloud_topic}")
             self.get_logger().info(f"🛤️ Trajectory visualization enabled on topic: {trajectory_topic}")
@@ -199,7 +202,8 @@ class Navigator(Node):
             seq: Sequence identifier
         """
         msg = QtNode()
-        msg.seq = seq
+        msg.seq = String()
+        msg.seq.data = seq
         msg.node.node_name.append(node_name)
         msg.node.node_position_x.append(x)
         msg.node.node_position_y.append(y)
@@ -387,7 +391,12 @@ class Navigator(Node):
                 # Check if accumulated cloud is too large and downsample if needed
                 if len(self.accumulated_cloud.points) > self.max_cloud_size:
                     self.accumulated_cloud = self.accumulated_cloud.voxel_down_sample(voxel_size=self.downsample_voxel_size)
-                    self.get_logger().info(f"📊 Downsampled environment cloud to {len(self.accumulated_cloud.points)} points")
+                    # self.get_logger().info(f"📊 Downsampled environment cloud to {len(self.accumulated_cloud.points)} points")
+            
+            # 如果可视化未启动且这是第一个有效数据，则启动可视化
+            if not self.visualization_started and len(self.accumulated_cloud.points) > 0:
+                self.get_logger().info("📊 First point cloud data received, starting visualization...")
+                self.start_visualization()
             
         except Exception as e:
             self.get_logger().error(f"Error processing point cloud: {e}")
@@ -422,6 +431,10 @@ class Navigator(Node):
                 else:
                     self.trajectory_cloud += pcd
             
+            # 如果可视化未启动且这是第一个有效轨迹数据，则启动可视化
+            if not self.visualization_started and len(self.trajectory_cloud.points) > 0:
+                self.get_logger().info("🛤️ First trajectory data received, starting visualization...")
+                self.start_visualization()
             
         except Exception as e:
             self.get_logger().error(f"Error processing trajectory: {e}")
@@ -460,29 +473,93 @@ class Navigator(Node):
         """
         Visualization thread for Open3D.
         """
-        vis = o3d.visualization.Visualizer()
-        vis.create_window(window_name="LIO-SAM Map + Trajectory Viewer", width=1280, height=720)
+        try:
+            vis = o3d.visualization.Visualizer()
+            vis.create_window(window_name="LIO-SAM Map + Trajectory Viewer", width=1280, height=720)
 
-        added_env = False
-        added_traj = False
+            added_env = False
+            added_traj = False
 
-        while True:
-            time.sleep(0.05)
-            with self.cloud_lock:
-                if not added_env and len(self.accumulated_cloud.points) > 0:
-                    vis.add_geometry(self.accumulated_cloud)
-                    added_env = True
-                elif added_env:
-                    vis.update_geometry(self.accumulated_cloud)
+            while self.visualization_running:
+                time.sleep(0.05)
+                with self.cloud_lock:
+                    if not added_env and len(self.accumulated_cloud.points) > 0:
+                        vis.add_geometry(self.accumulated_cloud)
+                        added_env = True
+                    elif added_env:
+                        vis.update_geometry(self.accumulated_cloud)
 
-                if not added_traj and len(self.trajectory_cloud.points) > 0:
-                    vis.add_geometry(self.trajectory_cloud)
-                    added_traj = True
-                elif added_traj:
-                    vis.update_geometry(self.trajectory_cloud)
+                    if not added_traj and len(self.trajectory_cloud.points) > 0:
+                        vis.add_geometry(self.trajectory_cloud)
+                        added_traj = True
+                    elif added_traj:
+                        vis.update_geometry(self.trajectory_cloud)
 
-            vis.poll_events()
-            vis.update_renderer()
+                vis.poll_events()
+                vis.update_renderer()
+            
+            # 关闭窗口
+            vis.destroy_window()
+            self.get_logger().info("🛑 Visualization window closed")
+            
+        except Exception as e:
+            self.get_logger().error(f"Visualization thread error: {e}")
+        finally:
+            self.visualization_started = False
+
+    def start_visualization(self) -> None:
+        """
+        启动点云可视化。
+        """
+        if not self.enable_visualization:
+            self.get_logger().warning("Visualization is disabled")
+            return
+        
+        if self.visualization_started:
+            self.get_logger().info("Visualization is already running")
+            return
+        
+        try:
+            self.visualization_running = True
+            self.visualization_thread = threading.Thread(target=self.visualize_thread, daemon=True)
+            self.visualization_thread.start()
+            self.visualization_started = True
+            self.get_logger().info("🎬 Point cloud visualization started")
+        except Exception as e:
+            self.get_logger().error(f"Failed to start visualization: {e}")
+            self.visualization_running = False
+            self.visualization_started = False
+
+    def stop_visualization(self) -> None:
+        """
+        停止点云可视化。
+        """
+        if not self.visualization_started:
+            self.get_logger().info("Visualization is not running")
+            return
+        
+        try:
+            self.visualization_running = False
+            
+            # 等待可视化线程结束
+            if self.visualization_thread and self.visualization_thread.is_alive():
+                self.visualization_thread.join(timeout=2.0)
+                if self.visualization_thread.is_alive():
+                    self.get_logger().warning("Visualization thread did not stop gracefully")
+            
+            self.visualization_started = False
+            self.get_logger().info("🛑 Point cloud visualization stopped")
+        except Exception as e:
+            self.get_logger().error(f"Error stopping visualization: {e}")
+
+    def is_visualization_running(self) -> bool:
+        """
+        检查可视化是否正在运行。
+        
+        Returns:
+            bool: 可视化是否正在运行
+        """
+        return self.visualization_started and self.visualization_running
 
     def clear_accumulated_cloud(self) -> None:
         """
@@ -770,6 +847,8 @@ def main():
         navigator.save_trajectory_cloud("final_trajectory_map.pcd")
         navigator.save_combined_cloud("final_combined_map.pcd")
     finally:
+        # 停止可视化
+        navigator.stop_visualization()
         navigator.destroy_node()
         rclpy.shutdown()
 
