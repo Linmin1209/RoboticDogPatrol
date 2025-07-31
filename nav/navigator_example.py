@@ -46,6 +46,7 @@ class InteractiveNavigator:
         print("  [G] Get Current Pose")
         print("  [I] Get Cloud Info")
         print("  [D] Set Downsample Parameters")
+        print("  [RT] Check Realtime Pose Status")
         print("  [H] Show Help")
         print("  [Q] Quit")
         print("=" * 50)
@@ -91,8 +92,17 @@ class InteractiveNavigator:
         """Add node at current pose."""
         node_name = self.get_int_input("Enter node name/ID", self.node_counter)
         
+        # Ask user if they want to use realtime pose data
+        use_realtime = input("Use realtime pose data (y/n, default: y): ").strip().lower()
+        use_realtime = use_realtime != 'n'  # Default to True unless explicitly 'n'
+        
         print("📍 Adding node at current pose...")
-        if self.navigator.add_node_at_current_pose(node_name):
+        if use_realtime:
+            print("🔄 Using realtime pose data with timeout check...")
+        else:
+            print("📊 Using any available pose data...")
+            
+        if self.navigator.add_node_at_current_pose(node_name, use_realtime=use_realtime):
             print(f"✅ Node {node_name} added successfully")
             self.node_counter += 1
         else:
@@ -266,6 +276,40 @@ class InteractiveNavigator:
         print(f"   Started: {self.navigator.visualization_started}")
         print(f"   Running: {self.navigator.visualization_running}")
     
+    def check_realtime_pose_status(self):
+        """Check realtime pose status."""
+        print("🔄 Checking realtime pose status...")
+        
+        # Get current pose
+        current_pose = self.navigator.get_current_pose()
+        if current_pose is None:
+            print("❌ No pose data available")
+            return
+        
+        # Get realtime pose
+        realtime_pose = self.navigator.get_realtime_pose()
+        if realtime_pose is None:
+            print("⚠️ Pose data is stale (older than timeout)")
+        else:
+            print("✅ Fresh pose data available")
+        
+        # Display pose information
+        position = current_pose['position']
+        euler = current_pose['euler']
+        print(f"📍 Current Position: ({position[0]:.3f}, {position[1]:.3f}, {position[2]:.3f})")
+        print(f"🔄 Current Orientation (roll, pitch, yaw): ({euler[0]:.3f}, {euler[1]:.3f}, {euler[2]:.3f})")
+        
+        # Show pose age
+        import time
+        current_time = time.time()
+        pose_age = current_time - self.navigator.last_pose_update_time
+        print(f"⏰ Pose data age: {pose_age:.3f} seconds")
+        
+        if pose_age > self.navigator.pose_timeout:
+            print("⚠️ Warning: Pose data is older than timeout threshold")
+        else:
+            print("✅ Pose data is within acceptable age range")
+    
     def show_help(self):
         """Show help information."""
         print("\n🎮 Interactive Navigator Help")
@@ -288,6 +332,7 @@ class InteractiveNavigator:
         print("  [G] Get Current Pose")
         print("  [I] Get Cloud Info")
         print("  [D] Set Downsample Parameters")
+        print("  [RT] Check Realtime Pose Status")
         print("  [H] Show Help")
         print("  [Q] Quit")
         print("  [NR] Add Node with Restriction Check")
@@ -374,6 +419,9 @@ class InteractiveNavigator:
         
         elif command == 'VH':
             self.check_visualization_status()
+        
+        elif command == 'RT':
+            self.check_realtime_pose_status()
         
         elif command == 'H':
             self.show_help()
