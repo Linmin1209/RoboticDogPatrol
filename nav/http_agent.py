@@ -105,7 +105,6 @@ class HTTPNavigatorAgent:
                         "初始化位姿": "POST /api/pose/init",
                         "开始重定位": "POST /api/pose/relocation",
                         "获取当前位姿": "GET /api/pose/current",
-                        "获取实时位姿": "GET /api/pose/realtime"
                     },
                     "可视化": {
                         "开始可视化": "POST /api/visualization/start",
@@ -399,25 +398,6 @@ class HTTPNavigatorAgent:
                     return jsonify({
                         "success": False,
                         "message": "暂无位姿数据"
-                    })
-            except Exception as e:
-                return jsonify({"success": False, "error": str(e)}), 500
-        
-        @self.app.route('/api/pose/realtime', methods=['GET'])
-        def get_realtime_pose():
-            """获取实时位姿"""
-            try:
-                pose = self.navigator.get_realtime_pose()
-                if pose:
-                    return jsonify({
-                        "success": True,
-                        "pose": pose,
-                        "message": "实时位姿获取成功"
-                    })
-                else:
-                    return jsonify({
-                        "success": False,
-                        "message": "实时位姿数据不可用或已过期"
                     })
             except Exception as e:
                 return jsonify({"success": False, "error": str(e)}), 500
