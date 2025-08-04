@@ -11,6 +11,8 @@ import threading
 import time
 import json
 import logging
+import os
+from datetime import datetime
 from typing import Dict, Any, Optional
 import rclpy
 from navigator import Navigator
@@ -36,6 +38,9 @@ class HTTPNavigatorAgent:
         self.port = port
         self.debug = debug
         
+        # 设置日志系统
+        self._setup_logging()
+        
         # 初始化ROS2和Navigator
         rclpy.init()
         self.navigator = Navigator(enable_visualization=True)
@@ -44,7 +49,7 @@ class HTTPNavigatorAgent:
         self.app = Flask(__name__)
         self.app.config['JSON_AS_ASCII'] = False  # 支持中文JSON
         
-        # 设置日志
+        # 设置Flask日志
         if not debug:
             log = logging.getLogger('werkzeug')
             log.setLevel(logging.WARNING)
@@ -56,9 +61,78 @@ class HTTPNavigatorAgent:
         self.ros_thread = None
         self.running = False
         
+        self.logger.info(f"🌐 HTTP Navigator Agent 初始化完成")
+        self.logger.info(f"📡 服务器地址: http://{host}:{port}")
+        self.logger.info(f"📖 API文档: http://{host}:{port}/api/help")
         print(f"🌐 HTTP Navigator Agent 初始化完成")
         print(f"📡 服务器地址: http://{host}:{port}")
         print(f"📖 API文档: http://{host}:{port}/api/help")
+    
+    def _log_api_call(self, endpoint: str, method: str, data: dict = None, success: bool = True, message: str = ""):
+        """记录API调用日志"""
+        try:
+            client_ip = request.remote_addr if request else "unknown"
+            log_msg = f"API调用: {method} {endpoint} - 客户端IP: {client_ip}"
+            
+            if data:
+                # 不记录敏感数据，只记录关键参数
+                safe_data = {}
+                for key, value in data.items():
+                    if key in ['camera_names', 'seq', 'node_name', 'edge_name', 'x', 'y', 'z']:
+                        safe_data[key] = value
+                    elif 'password' not in key.lower() and 'token' not in key.lower():
+                        safe_data[key] = str(value)[:100] if isinstance(value, str) else value
+                log_msg += f" - 参数: {safe_data}"
+            
+            if success:
+                self.logger.info(f"{log_msg} - 成功: {message}")
+            else:
+                self.logger.warning(f"{log_msg} - 失败: {message}")
+                
+        except Exception as e:
+            self.logger.error(f"记录API日志时出错: {e}")
+    
+    def _setup_logging(self):
+        """设置日志系统"""
+        # 创建logs目录
+        if not os.path.exists('logs'):
+            os.makedirs('logs')
+        
+        # 生成日志文件名（包含时间戳）
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_filename = f"logs/http_navigator_agent_{timestamp}.log"
+        
+        # 配置日志格式
+        log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        date_format = '%Y-%m-%d %H:%M:%S'
+        
+        # 创建logger
+        self.logger = logging.getLogger('HTTPNavigatorAgent')
+        self.logger.setLevel(logging.INFO)
+        
+        # 创建文件处理器
+        file_handler = logging.FileHandler(log_filename, encoding='utf-8')
+        file_handler.setLevel(logging.INFO)
+        file_formatter = logging.Formatter(log_format, date_format)
+        file_handler.setFormatter(file_formatter)
+        
+        # 创建控制台处理器（如果是debug模式）
+        if self.debug:
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(logging.INFO)
+            console_formatter = logging.Formatter(log_format, date_format)
+            console_handler.setFormatter(console_formatter)
+            self.logger.addHandler(console_handler)
+        
+        # 添加处理器到logger
+        self.logger.addHandler(file_handler)
+        
+        # 记录启动信息
+        self.logger.info("=" * 50)
+        self.logger.info("HTTP Navigator Agent 启动")
+        self.logger.info(f"日志文件: {log_filename}")
+        self.logger.info(f"调试模式: {self.debug}")
+        self.logger.info("=" * 50)
     
     def _register_routes(self):
         """注册所有API路由"""
@@ -67,12 +141,15 @@ class HTTPNavigatorAgent:
         @self.app.route('/api/health', methods=['GET'])
         def health_check():
             """健康检查"""
-            return jsonify({
+            self.logger.info("API调用: GET /api/health")
+            response = {
                 "success": True,
                 "message": "HTTP Navigator Agent 运行正常",
                 "timestamp": time.time(),
                 "ros_node": "navigator"
-            })
+            }
+            self.logger.info(f"健康检查响应: {response['message']}")
+            return jsonify(response)
         
         @self.app.route('/api/help', methods=['GET'])
         def api_help():
@@ -95,16 +172,19 @@ class HTTPNavigatorAgent:
                     "节点管理": {
                         "添加节点": "POST /api/nodes/add",
                         "当前位置添加节点": "POST /api/nodes/add_current",
-                        "删除节点": "DELETE /api/nodes/delete"
+                        "删除节点": "DELETE /api/nodes/delete",
+                        "查询节点": "POST /api/nodes/query"
                     },
                     "边管理": {
                         "添加边": "POST /api/edges/add",
-                        "删除边": "DELETE /api/edges/delete"
+                        "删除边": "DELETE /api/edges/delete",
+                        "查询边": "POST /api/edges/query"
                     },
                     "位姿操作": {
                         "初始化位姿": "POST /api/pose/init",
                         "开始重定位": "POST /api/pose/relocation",
                         "获取当前位姿": "GET /api/pose/current",
+                        "获取实时位姿": "GET /api/pose/realtime"
                     },
                     "可视化": {
                         "开始可视化": "POST /api/visualization/start",
@@ -119,7 +199,13 @@ class HTTPNavigatorAgent:
                         "保存轨迹点云": "POST /api/pointcloud/save/trajectory",
                         "保存组合点云": "POST /api/pointcloud/save/combined"
                     },
-                    "系统状态": "GET /api/status"
+                    "系统状态": "GET /api/status",
+                    "相机数据": {
+                        "获取相机数据": "POST /api/camera/data"
+                    },
+                    "机器人状态": {
+                        "获取导航状态": "GET /api/robot/nav_state"
+                    }
                 },
                 "usage_example": {
                     "curl": "curl -X POST http://YOUR_IP:8080/api/mapping/start -H 'Content-Type: application/json' -d '{\"seq\":\"index:123;\",\"attribute\":0}'"
@@ -136,14 +222,22 @@ class HTTPNavigatorAgent:
                 seq = data.get('seq', 'index:123;')
                 attribute = data.get('attribute', 0)
                 
+                self._log_api_call('/api/mapping/start', 'POST', data)
+                
                 result = self.navigator.start_mapping(seq, attribute)
+                message = "建图命令已发送" if result else "建图命令发送失败"
+                
+                self._log_api_call('/api/mapping/start', 'POST', data, result, message)
+                
                 return jsonify({
                     "success": result,
-                    "message": "建图命令已发送" if result else "建图命令发送失败",
+                    "message": message,
                     "seq": seq
                 })
             except Exception as e:
-                return jsonify({"success": False, "error": str(e)}), 500
+                error_msg = str(e)
+                self._log_api_call('/api/mapping/start', 'POST', data, False, f"异常: {error_msg}")
+                return jsonify({"success": False, "error": error_msg}), 500
         
         @self.app.route('/api/mapping/end', methods=['POST'])
         def end_mapping():
@@ -261,6 +355,60 @@ class HTTPNavigatorAgent:
             except Exception as e:
                 return jsonify({"success": False, "error": str(e)}), 500
         
+        
+        # 查询操作
+        @self.app.route('/api/nodes/query', methods=['POST'])
+        def query_nodes():
+            """查询节点"""
+            try:
+                data = request.get_json() or {}
+                seq = data.get('seq', 'index:123;')
+                attribute = data.get('attribute', 1)
+                
+                self._log_api_call('/api/nodes/query', 'POST', data)
+                
+                result = self.navigator.query_node(seq, attribute)
+                message = "查询节点命令已发送" if result else "查询节点命令发送失败"
+                
+                self._log_api_call('/api/nodes/query', 'POST', data, result, message)
+                
+                return jsonify({
+                    "success": result,
+                    "message": message,
+                    "seq": seq,
+                    "attribute": attribute
+                })
+            except Exception as e:
+                error_msg = str(e)
+                self._log_api_call('/api/nodes/query', 'POST', data, False, f"异常: {error_msg}")
+                return jsonify({"success": False, "error": error_msg}), 500
+        
+        @self.app.route('/api/edges/query', methods=['POST'])
+        def query_edges():
+            """查询边"""
+            try:
+                data = request.get_json() or {}
+                seq = data.get('seq', 'index:123;')
+                attribute = data.get('attribute', 2)
+                
+                self._log_api_call('/api/edges/query', 'POST', data)
+                
+                result = self.navigator.query_edge(seq, attribute)
+                message = "查询边命令已发送" if result else "查询边命令发送失败"
+                
+                self._log_api_call('/api/edges/query', 'POST', data, result, message)
+                
+                return jsonify({
+                    "success": result,
+                    "message": message,
+                    "seq": seq,
+                    "attribute": attribute
+                })
+            except Exception as e:
+                error_msg = str(e)
+                self._log_api_call('/api/edges/query', 'POST', data, False, f"异常: {error_msg}")
+                return jsonify({"success": False, "error": error_msg}), 500
+
         @self.app.route('/api/nodes/delete', methods=['DELETE'])
         def delete_nodes():
             """删除节点"""
@@ -334,6 +482,105 @@ class HTTPNavigatorAgent:
             except Exception as e:
                 return jsonify({"success": False, "error": str(e)}), 500
         
+        # 查询操作  
+        @self.app.route('/api/nodes/query', methods=['POST'])
+        def query_nodes():
+            """查询节点"""
+            try:
+                data = request.get_json() or {}
+                seq = data.get('seq', 'index:123;')
+                attribute = data.get('attribute', 1)
+                
+                result = self.navigator.query_node(seq, attribute)
+                return jsonify({
+                    "success": result,
+                    "message": "查询节点命令已发送" if result else "查询节点命令发送失败",
+                    "seq": seq,
+                    "attribute": attribute
+                })
+            except Exception as e:
+                return jsonify({"success": False, "error": str(e)}), 500
+        
+        @self.app.route('/api/edges/query', methods=['POST'])
+        def query_edges():
+            """查询边"""
+            try:
+                data = request.get_json() or {}
+                seq = data.get('seq', 'index:123;')
+                attribute = data.get('attribute', 2)
+                
+                result = self.navigator.query_edge(seq, attribute)
+                return jsonify({
+                    "success": result,
+                    "message": "查询边命令已发送" if result else "查询边命令发送失败",
+                    "seq": seq,
+                    "attribute": attribute
+                })
+            except Exception as e:
+                return jsonify({"success": False, "error": str(e)}), 500
+        
+        
+        # 相机数据获取
+        @self.app.route('/api/camera/data', methods=['POST'])
+        def get_camera_data():
+            """获取相机数据"""
+            try:
+                data = request.get_json()
+                if not data:
+                    self._log_api_call('/api/camera/data', 'POST', {}, False, "缺少请求数据")
+                    return jsonify({"success": False, "error": "缺少请求数据"}), 400
+                
+                camera_names = data.get('camera_names')
+                camera_modes = data.get('camera_modes')
+                
+                if not camera_names:
+                    self._log_api_call('/api/camera/data', 'POST', data, False, "缺少camera_names参数")
+                    return jsonify({"success": False, "error": "缺少必要参数: camera_names"}), 400
+                
+                self._log_api_call('/api/camera/data', 'POST', data)
+                
+                result = self.navigator.get_camera_data(camera_names, camera_modes)
+                success = result.get('code') == '000000'
+                message = f"相机数据获取{'成功' if success else '失败'}: {result.get('message', '')}"
+                
+                self._log_api_call('/api/camera/data', 'POST', data, success, message)
+                
+                return jsonify({
+                    "success": success,
+                    "code": result.get('code'),
+                    "message": result.get('message'),
+                    "data": result.get('data', {}),
+                    "camera_count": len(result.get('data', {})),
+                    "timestamp": time.time()
+                })
+            except Exception as e:
+                error_msg = str(e)
+                self._log_api_call('/api/camera/data', 'POST', data, False, f"异常: {error_msg}")
+                return jsonify({"success": False, "error": error_msg}), 500
+        
+        # 机器人导航状态
+        @self.app.route('/api/robot/nav_state', methods=['GET'])
+        def get_nav_state():
+            """获取机器人导航状态"""
+            try:
+                self._log_api_call('/api/robot/nav_state', 'GET')
+                
+                nav_state = self.navigator.get_nav_state()
+                message = "导航状态获取成功"
+                
+                self._log_api_call('/api/robot/nav_state', 'GET', {}, True, message)
+                
+                return jsonify({
+                    "success": True,
+                    "nav_state": nav_state,
+                    "message": message,
+                    "timestamp": time.time()
+                })
+            except Exception as e:
+                error_msg = str(e)
+                self._log_api_call('/api/robot/nav_state', 'GET', {}, False, f"异常: {error_msg}")
+                return jsonify({"success": False, "error": error_msg}), 500
+
         # 位姿操作
         @self.app.route('/api/pose/init', methods=['POST'])
         def init_pose():
@@ -398,6 +645,25 @@ class HTTPNavigatorAgent:
                     return jsonify({
                         "success": False,
                         "message": "暂无位姿数据"
+                    })
+            except Exception as e:
+                return jsonify({"success": False, "error": str(e)}), 500
+        
+        @self.app.route('/api/pose/realtime', methods=['GET'])
+        def get_realtime_pose():
+            """获取实时位姿"""
+            try:
+                pose = self.navigator.get_realtime_pose()
+                if pose:
+                    return jsonify({
+                        "success": True,
+                        "pose": pose,
+                        "message": "实时位姿获取成功"
+                    })
+                else:
+                    return jsonify({
+                        "success": False,
+                        "message": "实时位姿数据不可用或已过期"
                     })
             except Exception as e:
                 return jsonify({"success": False, "error": str(e)}), 500
@@ -557,13 +823,15 @@ class HTTPNavigatorAgent:
     
     def _start_ros_thread(self):
         """启动ROS2 spin线程"""
+        self.logger.info("启动ROS2 spin线程")
         self.running = True
         while self.running:
             try:
                 rclpy.spin_once(self.navigator, timeout_sec=0.1)
             except Exception as e:
-                print(f"ROS spin error: {e}")
+                self.logger.error(f"ROS spin错误: {e}")
                 break
+        self.logger.info("ROS2 spin线程已停止")
     
     def start(self):
         """启动HTTP服务器"""
@@ -571,6 +839,13 @@ class HTTPNavigatorAgent:
             # 启动ROS2线程
             self.ros_thread = threading.Thread(target=self._start_ros_thread, daemon=True)
             self.ros_thread.start()
+            self.logger.info("ROS2线程已启动")
+            
+            self.logger.info(f"🚀 HTTP Navigator Agent 启动中...")
+            self.logger.info(f"📡 服务器地址: http://{self.host}:{self.port}")
+            self.logger.info(f"📖 API文档: http://{self.host}:{self.port}/api/help")
+            self.logger.info(f"🔍 健康检查: http://{self.host}:{self.port}/api/health")
+            self.logger.info("✅ 服务器已启动，可以接收命令!")
             
             print(f"🚀 HTTP Navigator Agent 启动中...")
             print(f"📡 服务器地址: http://{self.host}:{self.port}")
@@ -582,23 +857,30 @@ class HTTPNavigatorAgent:
             self.app.run(host=self.host, port=self.port, debug=self.debug, threaded=True)
             
         except KeyboardInterrupt:
+            self.logger.info("⚠️ 收到中断信号，正在关闭服务器...")
             print("\n⚠️ 收到中断信号，正在关闭服务器...")
             self.stop()
         except Exception as e:
+            self.logger.error(f"❌ 服务器启动失败: {e}")
             print(f"❌ 服务器启动失败: {e}")
             self.stop()
     
     def stop(self):
         """停止服务器"""
+        self.logger.info("正在停止HTTP Navigator Agent...")
         self.running = False
         if self.ros_thread and self.ros_thread.is_alive():
             self.ros_thread.join(timeout=2.0)
+            self.logger.info("ROS2线程已停止")
         
         if hasattr(self, 'navigator'):
             self.navigator.stop_visualization()
             self.navigator.destroy_node()
+            self.logger.info("Navigator节点已销毁")
         
         rclpy.shutdown()
+        self.logger.info("🛑 HTTP Navigator Agent 已停止")
+        self.logger.info("=" * 50)
         print("🛑 HTTP Navigator Agent 已停止")
 
 
@@ -617,12 +899,17 @@ def main():
     print("=" * 50)
     print("机器人狗导航系统HTTP服务器")
     print(f"监听地址: {args.host}:{args.port}")
+    print(f"调试模式: {'开启' if args.debug else '关闭'}")
     print("按 Ctrl+C 停止服务器")
     print("=" * 50)
     
     # 创建并启动agent
-    agent = HTTPNavigatorAgent(host=args.host, port=args.port, debug=args.debug)
-    agent.start()
+    try:
+        agent = HTTPNavigatorAgent(host=args.host, port=args.port, debug=args.debug)
+        agent.start()
+    except Exception as e:
+        print(f"❌ 启动失败: {e}")
+        exit(1)
 
 
 if __name__ == "__main__":
