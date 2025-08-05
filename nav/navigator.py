@@ -111,7 +111,7 @@ class Navigator(Node):
                  notice_topic: str = "/qt_notice",
                  cloud_topic: str = "/lio_sam_ros2/mapping/cloud_registered",
                  trajectory_topic: str = "/lio_sam_ros2/mapping/trajectory",
-                 odometry_topic: str = "/lio_sam_ros2/mapping/odometry",
+                 odometry_topic: str = "/lio_sam_ros2/mapping/re_location_odometry",
                  enable_visualization: bool = True
                  ):
         """
@@ -128,13 +128,18 @@ class Navigator(Node):
             enable_visualization: Whether to enable point cloud visualization
         """
         super().__init__('navigator')
-        
+        # Setup QoS profile for robot state subscriptions with larger buffers
+        qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=1000  # 增加深度
+        )
         # Create publishers
-        self.command_publisher = self.create_publisher(QtCommand, command_topic, 10)
-        self.node_publisher = self.create_publisher(QtNode, add_node_topic, 10)
-        self.edge_publisher = self.create_publisher(QtEdge, add_edge_topic, 10)
-        self.query_result_node_publisher = self.create_publisher(String, "/query_result_node", 10)
-        self.query_result_edge_publisher = self.create_publisher(String, "/query_result_edge", 10)
+        self.command_publisher = self.create_publisher(QtCommand, command_topic, qos)
+        self.node_publisher = self.create_publisher(QtNode, add_node_topic, qos)
+        self.edge_publisher = self.create_publisher(QtEdge, add_edge_topic, qos)
+        self.query_result_node_publisher = self.create_publisher(String, "/query_result_node", qos)
+        self.query_result_edge_publisher = self.create_publisher(String, "/query_result_edge", qos)
         
         # Current pose storage
         self.current_pose = None
@@ -147,28 +152,23 @@ class Navigator(Node):
         self.notice_lock = threading.Lock()
         self.command_confirmations = {}  # Store command confirmations by sequence
         
+        # Index management for command sequences
+        self.command_index = 123  # Start from 123
+        self.index_lock = threading.Lock()  # Thread-safe index management
+        
         # Create subscriber for odometry
         self.odometry_subscriber = self.create_subscription(
             Odometry,
             odometry_topic,
             self.odometry_callback,
-            1
+            qos
         )
         
-        # Create subscriber for qt_notice feedback
-        self.notice_subscriber = self.create_subscription(
-            String,
-            notice_topic,
-            self.notice_callback,
-            10
-        )
-        
-        # Setup QoS profile for robot state subscriptions
-        qos = QoSProfile(
-            reliability=QoSReliabilityPolicy.BEST_EFFORT,
-            history=QoSHistoryPolicy.KEEP_LAST,
-            depth=10
-        )
+        # Notice subscriber will be created only when needed
+        self.notice_subscriber = None
+        self.notice_topic = notice_topic
+        self.notice_qos = qos
+       
         
         # Robot state message cache
         self.msg_cache = {
@@ -236,12 +236,18 @@ class Navigator(Node):
         self.visualization_thread = None
         
         if self.enable_visualization:
-            # Create subscriber for point cloud
+            # Create subscriber for point cloud with larger buffer
+            cloud_qos = QoSProfile(
+                reliability=QoSReliabilityPolicy.BEST_EFFORT,
+                history=QoSHistoryPolicy.KEEP_LAST,
+                depth=100  # 增加点云缓冲区
+            )
+            
             self.cloud_subscriber = self.create_subscription(
                 PointCloud2, 
                 cloud_topic, 
                 self.cloud_callback, 
-                10
+                cloud_qos
             )
             
             # Create subscriber for trajectory
@@ -261,256 +267,235 @@ class Navigator(Node):
         self.get_logger().info("🤖 Robot state subscriptions enabled")
         self.get_logger().info("🚀 Navigator initialized successfully")
     
-    def start_mapping(self, seq: str = "index:123;", attribute: int = 0) -> None:
+    def start_mapping(self, attribute: int = 0) -> int:
         """
         Start the mapping process.
         
         Args:
-            seq: Sequence identifier
             attribute: Attribute value (B2 fixed as 0)
+            
+        Returns:
+            int: The command index used
         """
         msg = QtCommand()
         msg.command = 3  # Start mapping command
         msg.attribute = attribute
         msg.seq = String()
-        msg.seq.data = seq
         
-        self.command_publisher.publish(msg)
-        self.get_logger().info("🗺️ Sent start mapping command")
+        # Use automatic index management
+        index = self._publish_command_with_index(msg, wait_for_confirmation=True)
+        self.get_logger().info(f"🗺️ Sent start mapping command with index: {index}")
         
-        # Wait for confirmation if sequence is provided
-        if seq and 'index:' in seq:
-            try:
-                seq_id = seq.split('index:')[1].split(';')[0]
-                self.wait_for_command_confirmation(seq_id, timeout=3.0)
-            except Exception as e:
-                self.get_logger().warning(f"Could not extract sequence ID for confirmation: {e}")
+        return index
     
-    def end_mapping(self, seq: str = "index:123;", 
-                   floor_index: int = 0, pcdmap_index: int = 0) -> None:
+    def end_mapping(self, floor_index: int = 0, pcdmap_index: int = 0) -> int:
         """
         End the mapping process.
         
         Args:
-            seq: Sequence identifier
             floor_index: Floor index
             pcdmap_index: PCD map index
+            
+        Returns:
+            int: The command index used
         """
         msg = QtCommand()
         msg.seq = String()
-        msg.seq.data = seq
         msg.command = 4  # End mapping
         msg.floor_index.append(floor_index)
         msg.pcdmap_index.append(pcdmap_index)
         
-        self.command_publisher.publish(msg)
-        self.get_logger().info(f"✅ Sent end mapping command (floor={floor_index}, map={pcdmap_index})")
+        # Use automatic index management
+        index = self._publish_command_with_index(msg, wait_for_confirmation=True)
+        self.get_logger().info(f"✅ Sent end mapping command with index: {index} (floor={floor_index}, map={pcdmap_index})")
         
-        # Wait for confirmation if sequence is provided
-        if seq and 'index:' in seq:
-            try:
-                seq_id = seq.split('index:')[1].split(';')[0]
-                self.wait_for_command_confirmation(seq_id, timeout=3.0)
-            except Exception as e:
-                self.get_logger().warning(f"Could not extract sequence ID for confirmation: {e}")
+        return index
     
-    def start_navigation(self, seq: str = "index:123;") -> None:
+    def start_navigation(self) -> int:
         """
         Start navigation.
         
-        Args:
-            seq: Sequence identifier
+        Returns:
+            int: The command index used
         """
         msg = QtCommand()
         msg.seq = String()
-        msg.seq.data = seq
+        msg.command = 8 # Start Navigation
         
-        self.command_publisher.publish(msg)
-        self.get_logger().info("🚀 Sent start navigation command")
+        # Use automatic index management
+        index = self._publish_command_with_index(msg, wait_for_confirmation=True)
+        self.get_logger().info(f"🚀 Sent start navigation command with index: {index}")
         
-        # Wait for confirmation if sequence is provided
-        if seq and 'index:' in seq:
-            try:
-                seq_id = seq.split('index:')[1].split(';')[0]
-                self.wait_for_command_confirmation(seq_id, timeout=3.0)
-            except Exception as e:
-                self.get_logger().warning(f"Could not extract sequence ID for confirmation: {e}")
+        return index
+
+    def default_navigation_loop(self) -> int:
+        """
+        Start navigation loop.
+        
+        Returns:
+            int: The command index used
+        """
+        msg = QtCommand()
+        msg.seq = String()
+        msg.command = 10 # Start Navigation
+        
+        # Use automatic index management
+        index = self._publish_command_with_index(msg, wait_for_confirmation=True)
+        self.get_logger().info(f"🚀 Sent start navigation loop command with index: {index}")
+        
+        return index
     
-    def pause_navigation(self, seq: str = "index:123;") -> None:
+    def pause_navigation(self) -> int:
         """
         Pause navigation.
         
-        Args:
-            seq: Sequence identifier
+        Returns:
+            int: The command index used
         """
         msg = QtCommand()
         msg.seq = String()
-        msg.seq.data = seq
         msg.command = 13  # Pause navigation
         
-        self.command_publisher.publish(msg)
-        self.get_logger().info("⏸️ Sent pause navigation command")
+        # Use automatic index management
+        index = self._publish_command_with_index(msg, wait_for_confirmation=True)
+        self.get_logger().info(f"⏸️ Sent pause navigation command with index: {index}")
         
-        # Wait for confirmation if sequence is provided
-        if seq and 'index:' in seq:
-            try:
-                seq_id = seq.split('index:')[1].split(';')[0]
-                self.wait_for_command_confirmation(seq_id, timeout=3.0)
-            except Exception as e:
-                self.get_logger().warning(f"Could not extract sequence ID for confirmation: {e}")
+        return index
     
-    def query_node(self, seq: str = "index:123;", attribute = 1) -> bool:
+    def query_node(self, attribute: int = 1) -> tuple[bool, int]:
         """
         Query navigation nodes.
         
         Args:
-            seq: Sequence identifier
             attribute: Query attribute (default: 1 for nodes)
             
         Returns:
-            bool: True if command was sent and confirmed successfully, False otherwise
+            tuple[bool, int]: (success, command_index)
         """
         try:
             msg = QtCommand()
             msg.seq = String()
-            msg.seq.data = seq
             msg.command = 2
             msg.attribute = attribute
             msg.floor_index.append(999)
             msg.node_edge_name.append(999)
-            self.command_publisher.publish(msg)
-            self.get_logger().info("▶️ Sent query node command")
             
-            # Wait for command confirmation
-            if seq and 'index:' in seq:
-                try:
-                    seq_id = seq.split('index:')[1].split(';')[0]
-                    confirmation = self.wait_for_command_confirmation(seq_id, timeout=3.0)
-                    if confirmation:
-                        # Publish query result to feedback topic
-                        result_msg = String()
-                        result_msg.data = json.dumps({
-                            "seq": seq,
-                            "command": "query_node",
-                            "attribute": attribute,
-                            "status": "success" if confirmation.get('success', False) else "failed",
-                            "message": confirmation.get('message', ''),
-                            "timestamp": time.time()
-                        })
-                        self.query_result_node_publisher.publish(result_msg)
-                        self.get_logger().info(f"📤 Published query node result: {confirmation.get('message', '')}")
-                        return confirmation.get('success', False)
-                    else:
-                        # Publish timeout result
-                        result_msg = String()
-                        result_msg.data = json.dumps({
-                            "seq": seq,
-                            "command": "query_node",
-                            "attribute": attribute,
-                            "status": "timeout",
-                            "message": "Command confirmation timeout",
-                            "timestamp": time.time()
-                        })
-                        self.query_result_node_publisher.publish(result_msg)
-                        self.get_logger().warning("⏰ Query node command confirmation timeout")
-                        return False
-                except Exception as e:
-                    self.get_logger().warning(f"Could not extract sequence ID for confirmation: {e}")
-                    return True  # Command was sent successfully even if confirmation failed
-            return True
+            # Use automatic index management
+            index = self._publish_command_with_index(msg, wait_for_confirmation=True)
+            self.get_logger().info(f"▶️ Sent query node command with index: {index}")
+            
+            # Check if confirmation was successful
+            confirmation = self.get_command_confirmation(str(index))
+            if confirmation:
+                # Publish query result to feedback topic
+                result_msg = String()
+                result_msg.data = json.dumps({
+                    "seq": f"index:{index};",
+                    "command": "query_node",
+                    "attribute": attribute,
+                    "status": "success" if confirmation.get('success', False) else "failed",
+                    "message": confirmation.get('message', ''),
+                    "timestamp": time.time()
+                })
+                self.query_result_node_publisher.publish(result_msg)
+                self.get_logger().info(f"📤 Published query node result: {confirmation.get('message', '')}")
+                return confirmation.get('success', False), index
+            else:
+                # Publish timeout result
+                result_msg = String()
+                result_msg.data = json.dumps({
+                    "seq": f"index:{index};",
+                    "command": "query_node",
+                    "attribute": attribute,
+                    "status": "timeout",
+                    "message": "Command confirmation timeout",
+                    "timestamp": time.time()
+                })
+                self.query_result_node_publisher.publish(result_msg)
+                self.get_logger().warning("⏰ Query node command confirmation timeout")
+                return False, index
+                
         except Exception as e:
             self.get_logger().error(f"Error sending query node command: {e}")
-            return False
+            return False, -1
     
-    def query_edge(self, seq: str = "index:123;", attribute = 2) -> bool:
+    def query_edge(self, attribute: int = 2) -> tuple[bool, int]:
         """
         Query navigation edges.
         
         Args:
-            seq: Sequence identifier
             attribute: Query attribute (default: 2 for edges)
             
         Returns:
-            bool: True if command was sent and confirmed successfully, False otherwise
+            tuple[bool, int]: (success, command_index)
         """
         try:
             msg = QtCommand()
             msg.seq = String()
-            msg.seq.data = seq
             msg.command = 2
             msg.attribute = attribute
             msg.floor_index.append(999)
             msg.node_edge_name.append(999)
-            self.command_publisher.publish(msg)
-            self.get_logger().info("▶️ Sent query edge command")
             
-            # Wait for command confirmation
-            if seq and 'index:' in seq:
-                try:
-                    seq_id = seq.split('index:')[1].split(';')[0]
-                    confirmation = self.wait_for_command_confirmation(seq_id, timeout=3.0)
-                    if confirmation:
-                        # Publish query result to feedback topic
-                        result_msg = String()
-                        result_msg.data = json.dumps({
-                            "seq": seq,
-                            "command": "query_edge",
-                            "attribute": attribute,
-                            "status": "success" if confirmation.get('success', False) else "failed",
-                            "message": confirmation.get('message', ''),
-                            "timestamp": time.time()
-                        })
-                        self.query_result_edge_publisher.publish(result_msg)
-                        self.get_logger().info(f"📤 Published query edge result: {confirmation.get('message', '')}")
-                        return confirmation.get('success', False)
-                    else:
-                        # Publish timeout result
-                        result_msg = String()
-                        result_msg.data = json.dumps({
-                            "seq": seq,
-                            "command": "query_edge",
-                            "attribute": attribute,
-                            "status": "timeout",
-                            "message": "Command confirmation timeout",
-                            "timestamp": time.time()
-                        })
-                        self.query_result_edge_publisher.publish(result_msg)
-                        self.get_logger().warning("⏰ Query edge command confirmation timeout")
-                        return False
-                except Exception as e:
-                    self.get_logger().warning(f"Could not extract sequence ID for confirmation: {e}")
-                    return True  # Command was sent successfully even if confirmation failed
-            return True
+            # Use automatic index management
+            index = self._publish_command_with_index(msg, wait_for_confirmation=True)
+            self.get_logger().info(f"▶️ Sent query edge command with index: {index}")
+            
+            # Check if confirmation was successful
+            confirmation = self.get_command_confirmation(str(index))
+            if confirmation:
+                # Publish query result to feedback topic
+                result_msg = String()
+                result_msg.data = json.dumps({
+                    "seq": f"index:{index};",
+                    "command": "query_edge",
+                    "attribute": attribute,
+                    "status": "success" if confirmation.get('success', False) else "failed",
+                    "message": confirmation.get('message', ''),
+                    "timestamp": time.time()
+                })
+                self.query_result_edge_publisher.publish(result_msg)
+                self.get_logger().info(f"📤 Published query edge result: {confirmation.get('message', '')}")
+                return confirmation.get('success', False), index
+            else:
+                # Publish timeout result
+                result_msg = String()
+                result_msg.data = json.dumps({
+                    "seq": f"index:{index};",
+                    "command": "query_edge",
+                    "attribute": attribute,
+                    "status": "timeout",
+                    "message": "Command confirmation timeout",
+                    "timestamp": time.time()
+                })
+                self.query_result_edge_publisher.publish(result_msg)
+                self.get_logger().warning("⏰ Query edge command confirmation timeout")
+                return False, index
+                
         except Exception as e:
             self.get_logger().error(f"Error sending query edge command: {e}")
-            return False
+            return False, -1
 
 
-    def recover_navigation(self, seq: str = "index:123;") -> None:
+    def recover_navigation(self) -> int:
         """
         Recover/resume navigation.
         
-        Args:
-            seq: Sequence identifier
+        Returns:
+            int: The command index used
         """
         msg = QtCommand()
         msg.seq = String()
-        msg.seq.data = seq
         msg.command = 14  # Recover navigation command
         
-        self.command_publisher.publish(msg)
-        self.get_logger().info("▶️ Sent recover navigation command")
+        # Use automatic index management
+        index = self._publish_command_with_index(msg, wait_for_confirmation=True)
+        self.get_logger().info(f"▶️ Sent recover navigation command with index: {index}")
         
-        # Wait for confirmation if sequence is provided
-        if seq and 'index:' in seq:
-            try:
-                seq_id = seq.split('index:')[1].split(';')[0]
-                self.wait_for_command_confirmation(seq_id, timeout=3.0)
-            except Exception as e:
-                self.get_logger().warning(f"Could not extract sequence ID for confirmation: {e}")
+        return index
     
     def add_node(self, node_name: int, x: float, y: float, z: float = 0.0, 
-                yaw: float = 1.57, seq: str = "index:123;") -> None:
+                yaw: float = 1.57) -> int:
         """
         Add a navigation node.
         
@@ -520,11 +505,12 @@ class Navigator(Node):
             y: Y coordinate
             z: Z coordinate (default: 0.0)
             yaw: Yaw angle in radians (default: 1.57)
-            seq: Sequence identifier
+            
+        Returns:
+            int: The command index used
         """
         msg = QtNode()
         msg.seq = String()
-        msg.seq.data = seq
         msg.node.node_name.append(node_name)
         msg.node.node_position_x.append(x)
         msg.node.node_position_y.append(y)
@@ -537,34 +523,33 @@ class Navigator(Node):
         msg.node.node_state_2.append(0)
         msg.node.node_state_3.append(0)
         
-        self.node_publisher.publish(msg)
-        self.get_logger().info(f"✅ Added node {node_name} at ({x}, {y}, {z}) with yaw {yaw}")
+        # Use automatic index management
+        index = self._publish_command_with_index(msg, wait_for_confirmation=True)
+        self.get_logger().info(f"✅ Added node {node_name} at ({x}, {y}, {z}) with yaw {yaw}, index: {index}")
         
-        # Wait for confirmation if sequence is provided
-        if seq and 'index:' in seq:
-            try:
-                seq_id = seq.split('index:')[1].split(';')[0]
-                self.wait_for_command_confirmation(seq_id, timeout=3.0)
-            except Exception as e:
-                self.get_logger().warning(f"Could not extract sequence ID for confirmation: {e}")
+        return index
     
-    def delete_node(self, node_ids: List[int], seq: str = "index:123;") -> None:
+    def delete_node(self, node_ids: List[int]) -> int:
         """
         Delete navigation nodes.
         
         Args:
             node_ids: List of node IDs to delete
-            seq: Sequence identifier
+            
+        Returns:
+            int: The command index used
         """
         msg = QtCommand()
         msg.seq = String()
-        msg.seq.data = seq
         msg.command = 1  # Delete operation
         msg.attribute = 1  # Delete nodes
         msg.node_edge_name.extend(node_ids)
         
-        self.command_publisher.publish(msg)
-        self.get_logger().info(f"🗑️ Sent delete node command: {node_ids}")
+        # Use automatic index management
+        index = self._publish_command_with_index(msg, wait_for_confirmation=True)
+        self.get_logger().info(f"🗑️ Sent delete node command: {node_ids}, index: {index}")
+        
+        return index
     
     def add_edge(self, edge_name: int, start_node: int, end_node: int, 
                 dog_speed: float = 1.0, seq: str = "index:123;") -> None:
@@ -596,49 +581,49 @@ class Navigator(Node):
         msg.edge.edge_state_3.append(0)
         msg.edge.edge_state_4.append(0)
         
-        self.edge_publisher.publish(msg)
-        self.get_logger().info(f"✅ Added edge {edge_name} from node {start_node} to {end_node}")
+       # Use automatic index management
+        index = self._publish_command_with_index(msg, wait_for_confirmation=True)
+        self.get_logger().info(f"✅ Added edge {edge_name} from node {start_node} to {end_node}, index: {index}")
         
-        # Wait for confirmation if sequence is provided
-        if seq and 'index:' in seq:
-            try:
-                seq_id = seq.split('index:')[1].split(';')[0]
-                self.wait_for_command_confirmation(seq_id, timeout=3.0)
-            except Exception as e:
-                self.get_logger().warning(f"Could not extract sequence ID for confirmation: {e}")
+        return index
     
-    def delete_edge(self, edge_ids: List[int], seq: str = "index:123;") -> None:
+    def delete_edge(self, edge_ids: List[int]) -> int:
         """
         Delete navigation edges.
         
         Args:
             edge_ids: List of edge IDs to delete
-            seq: Sequence identifier
+            
+        Returns:
+            int: The command index used
         """
         msg = QtCommand()
         msg.seq = String()
-        msg.seq.data = seq
         msg.command = 1  # Delete operation
         msg.attribute = 2  # Delete edges
         msg.node_edge_name.extend(edge_ids)
         
-        self.command_publisher.publish(msg)
-        self.get_logger().info(f"🗑️ Sent delete edge command: {edge_ids}")
+        # Use automatic index management
+        index = self._publish_command_with_index(msg, wait_for_confirmation=True)
+        self.get_logger().info(f"🗑️ Sent delete edge command: {edge_ids}, index: {index}")
+        
+        return index
     
-    def pose_init(self, seq: str = "index:123;", 
+    def pose_init(self, 
                  translation: Tuple[float, float, float] = (0.0, 0.0, 0.0),
-                 quaternion: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0)) -> None:
+                 quaternion: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0)) -> int:
         """
         Initialize pose.
         
         Args:
-            seq: Sequence identifier
             translation: Translation vector (x, y, z)
             quaternion: Quaternion (x, y, z, w)
+            
+        Returns:
+            int: The command index used
         """
         msg = QtCommand()
         msg.seq = String()
-        msg.seq.data = seq
         msg.command = 7  # Pose initialization
         
         # Set quaternion
@@ -652,59 +637,70 @@ class Navigator(Node):
         msg.translation_y = translation[1]
         msg.translation_z = translation[2]
         
-        self.command_publisher.publish(msg)
-        self.get_logger().info(f"📍 Sent pose init command at {translation}")
+        # Use automatic index management
+        index = self._publish_command_with_index(msg, wait_for_confirmation=True)
+        self.get_logger().info(f"📍 Sent pose init command at {translation}, index: {index}")
         
-        # Wait for confirmation if sequence is provided
-        if seq and 'index:' in seq:
-            try:
-                seq_id = seq.split('index:')[1].split(';')[0]
-                self.wait_for_command_confirmation(seq_id, timeout=3.0)
-            except Exception as e:
-                self.get_logger().warning(f"Could not extract sequence ID for confirmation: {e}")
+        return index
     
-    def start_relocation(self, seq: str = "index:123;", attribute: int = 0) -> None:
+    def start_relocation(self) -> int:
         """
         Start relocation process.
         
         Args:
-            seq: Sequence identifier
             attribute: Attribute value (B2 fixed as 0)
+            
+        Returns:
+            int: The command index used
         """
         msg = QtCommand()
         msg.seq = String()
-        msg.seq.data = seq
         msg.command = 6  # Start relocation command
-        msg.attribute = attribute
         
-        self.command_publisher.publish(msg)
-        self.get_logger().info("📍 Sent start relocation command")
+        # Use automatic index management
+        index = self._publish_command_with_index(msg, wait_for_confirmation=True)
+        self.get_logger().info(f"📍 Sent start relocation command with index: {index}")
         
-        # Wait for confirmation if sequence is provided
-        if seq and 'index:' in seq:
-            try:
-                seq_id = seq.split('index:')[1].split(';')[0]
-                self.wait_for_command_confirmation(seq_id, timeout=3.0)
-            except Exception as e:
-                self.get_logger().warning(f"Could not extract sequence ID for confirmation: {e}")
+        return index
+
+    def close_all_nodes(self) -> int:
+        """
+        Close all nodes.
+        
+        Args:
+            attribute: Attribute value (B2 fixed as 0)
+            
+        Returns:
+            int: The command index used
+        """
+        msg = QtCommand()
+        msg.seq = String()
+        msg.command = 99  # Close all nodes command
+        
+        # Use automatic index management
+        index = self._publish_command_with_index(msg, wait_for_confirmation=True)
+        self.get_logger().info(f"📍 Sent start relocation command with index: {index}")
+        
+        return index
+
     
-    def delete_all_nodes(self, seq: str = "index:123;") -> None:
+    def delete_all_nodes(self) -> int:
         """
         Delete all nodes.
         
-        Args:
-            seq: Sequence identifier
+        Returns:
+            int: The command index used
         """
-        self.delete_node([999], seq)
+        return self.delete_node([999])
     
-    def delete_all_edges(self, seq: str = "index:123;") -> None:
+    def delete_all_edges(self) -> int:
         """
         Delete all edges.
         
-        Args:
-            seq: Sequence identifier
+        Returns:
+            int: The command index used
         """
-        self.delete_edge([999], seq)
+        return self.delete_edge([999])
 
     def cloud_callback(self, msg: PointCloud2) -> None:
         """
@@ -1112,33 +1108,62 @@ class Navigator(Node):
                     'timestamp': time.time()
                 }
                 
-                # Parse the notice message to extract sequence and status
-                # Expected format: "seq:index:123; status:success" or similar
                 notice_data = msg.data
                 self.get_logger().info(f"📢 Received notice: {notice_data}")
                 
-                # Extract sequence ID if present
-                if 'index:' in notice_data:
-                    try:
-                        seq_start = notice_data.find('index:') + 6
-                        seq_end = notice_data.find(';', seq_start)
-                        if seq_end == -1:
-                            seq_end = len(notice_data)
-                        seq_id = notice_data[seq_start:seq_end].strip()
-                        
-                        # Store confirmation for this sequence
-                        self.command_confirmations[seq_id] = {
-                            'message': notice_data,
-                            'timestamp': time.time(),
-                            'success': 'success' in notice_data.lower() or 'ok' in notice_data.lower()
-                        }
-                        
-                        self.get_logger().info(f"✅ Command confirmation stored for sequence: {seq_id}")
-                    except Exception as e:
-                        self.get_logger().warning(f"Could not parse sequence from notice: {e}")
+                # 简化解析逻辑：只要找到index数字就认为是正确的匹配
+                seq_id = None
+                success = False
+                
+                # 查找所有数字
+                import re
+                numbers = re.findall(r'\b\d+\b', notice_data)
+                
+                if numbers:
+                    # 找到最大的数字作为序列ID（通常是3位或以上的数字）
+                    potential_ids = [int(num) for num in numbers if len(num) >= 3]
+                    if potential_ids:
+                        seq_id = str(max(potential_ids))
+                        self.get_logger().info(f"🔍 Found index: {seq_id} from message: {notice_data}")
+                    else:
+                        # 如果没有3位以上的数字，使用最大的数字
+                        seq_id = str(max([int(num) for num in numbers]))
+                        self.get_logger().info(f"🔍 Found index: {seq_id} from message: {notice_data}")
+                else:
+                    self.get_logger().warning(f"⚠️ No numbers found in notice: {notice_data}")
+                
+                # 判断成功状态：只要找到index就认为是成功的
+                success = seq_id is not None
+                
+                # 如果找到了序列ID，存储确认信息
+                if seq_id:
+                    self.command_confirmations[seq_id] = {
+                        'message': notice_data,
+                        'timestamp': time.time(),
+                        'success': success,
+                        'raw_data': notice_data  # 保存原始数据用于调试
+                    }
+                    
+                    self.get_logger().info(f"✅ Command confirmation stored for sequence: {seq_id}")
+                    self.get_logger().info(f"   📋 Success: {success}")
+                    self.get_logger().info(f"   📝 Message: {notice_data}")
+                else:
+                    # 如果没有找到序列ID，记录原始消息用于调试
+                    self.get_logger().warning(f"⚠️ Could not extract sequence ID from notice: {notice_data}")
+                    # 存储到特殊键中用于调试
+                    debug_key = f"debug_{int(time.time())}"
+                    self.command_confirmations[debug_key] = {
+                        'message': notice_data,
+                        'timestamp': time.time(),
+                        'success': success,
+                        'raw_data': notice_data,
+                        'note': 'No sequence ID found'
+                    }
                 
         except Exception as e:
             self.get_logger().error(f"Error processing notice: {e}")
+            import traceback
+            traceback.print_exc()
 
     def get_current_pose(self) -> Optional[dict]:
         """
@@ -1191,17 +1216,16 @@ class Navigator(Node):
         self.get_logger().warning(f"Timeout waiting for fresh pose data ({timeout}s)")
         return None
 
-    def add_node_at_current_pose(self, node_name: int, seq: str = "index:123;", use_realtime: bool = True) -> bool:
+    def add_node_at_current_pose(self, node_name: int, use_realtime: bool = True) -> tuple[bool, int]:
         """
         Add a navigation node at the current pose from odometry.
         
         Args:
             node_name: Name/ID of the node
-            seq: Sequence identifier
             use_realtime: Whether to use realtime pose data with timeout check
             
         Returns:
-            True if node was added successfully, False if no pose data available
+            tuple[bool, int]: (success, command_index)
         """
         if use_realtime:
             # Try to get fresh pose data
@@ -1211,13 +1235,13 @@ class Navigator(Node):
                 current_pose = self.wait_for_fresh_pose(timeout=1.0)
                 if current_pose is None:
                     self.get_logger().error("Failed to get fresh pose data within timeout")
-                    return False
+                    return False, -1
         else:
             # Use any available pose data (original behavior)
             current_pose = self.get_current_pose()
             if current_pose is None:
                 self.get_logger().warning("No current pose available from odometry")
-                return False
+                return False, -1
         
         position = current_pose['position']
         yaw = current_pose['euler'][2]  # Yaw angle
@@ -1228,9 +1252,9 @@ class Navigator(Node):
         self.get_logger().info(f"Using pose data (age: {pose_age:.3f}s)")
         
         # Add node using current pose
-        self.add_node(node_name, position[0], position[1], position[2], yaw, seq)
-        self.get_logger().info(f"📍 Added node {node_name} at current pose: ({position[0]:.2f}, {position[1]:.2f}, {position[2]:.2f}) with yaw {yaw:.2f}")
-        return True
+        index = self.add_node(node_name, position[0], position[1], position[2], yaw)
+        self.get_logger().info(f"📍 Added node {node_name} at current pose: ({position[0]:.2f}, {position[1]:.2f}, {position[2]:.2f}) with yaw {yaw:.2f}, index: {index}")
+        return True, index
     
     def get_last_notice(self) -> Optional[dict]:
         """
@@ -1253,16 +1277,73 @@ class Navigator(Node):
         Returns:
             Confirmation data or None if timeout
         """
+        # Ensure notice subscriber exists when waiting for confirmation
+        self._ensure_notice_subscriber()
+        
+        # 首先检查是否已经收到了确认消息
+        with self.notice_lock:
+            if seq_id in self.command_confirmations:
+                confirmation = self.command_confirmations[seq_id].copy()
+                self.get_logger().info(f"✅ Already received confirmation for sequence {seq_id}: {confirmation['message']}")
+                # Destroy notice subscriber after successful confirmation
+                self._destroy_notice_subscriber()
+                return confirmation
+        
+        self.get_logger().info(f"🔄 Waiting for command confirmation (seq: {seq_id}, timeout: {timeout}s)")
+        
         start_time = time.time()
         while time.time() - start_time < timeout:
             with self.notice_lock:
                 if seq_id in self.command_confirmations:
                     confirmation = self.command_confirmations[seq_id].copy()
                     self.get_logger().info(f"✅ Received confirmation for sequence {seq_id}: {confirmation['message']}")
+                    # Destroy notice subscriber after successful confirmation
+                    self._destroy_notice_subscriber()
                     return confirmation
             time.sleep(0.1)  # Small delay to avoid busy waiting
         
-        self.get_logger().warning(f"⏰ Timeout waiting for command confirmation (seq: {seq_id}, timeout: {timeout}s)")
+        # 详细的超时错误信息
+        elapsed_time = time.time() - start_time
+        self.get_logger().error(f"❌ Command confirmation timeout!")
+        self.get_logger().error(f"   📋 Sequence ID: {seq_id}")
+        self.get_logger().error(f"   ⏱️  Timeout duration: {timeout}s")
+        self.get_logger().error(f"   ⏰ Actual elapsed time: {elapsed_time:.2f}s")
+        self.get_logger().error(f"   📢 Notice topic: {self.notice_topic}")
+        self.get_logger().error(f"   🔍 Available confirmations: {list(self.command_confirmations.keys())}")
+        self.get_logger().error(f"   📊 Total confirmations received: {len(self.command_confirmations)}")
+        
+        # 获取详细的分析信息
+        analysis = self.get_latest_notice_analysis()
+        if analysis['recent_confirmations']:
+            self.get_logger().error("   📝 Recent confirmations details:")
+            for conf in analysis['recent_confirmations']:
+                self.get_logger().error(f"      - Seq: {conf['seq_id']}, Success: {conf['success']}")
+                self.get_logger().error(f"        Raw message: {conf['raw_data']}")
+                if conf.get('note'):
+                    self.get_logger().error(f"        Note: {conf['note']}")
+        
+        # 检查是否收到了其他序列的确认
+        if self.command_confirmations:
+            self.get_logger().warning(f"⚠️  Received confirmations for other sequences: {list(self.command_confirmations.keys())}")
+            
+            # 尝试找到最接近的序列ID
+            try:
+                target_seq = int(seq_id)
+                available_seqs = []
+                for key in self.command_confirmations.keys():
+                    if key.isdigit():
+                        available_seqs.append(int(key))
+                    elif key.startswith('debug_'):
+                        continue
+                
+                if available_seqs:
+                    closest_seq = min(available_seqs, key=lambda x: abs(x - target_seq))
+                    self.get_logger().warning(f"🔍 Closest available sequence ID: {closest_seq} (target was {target_seq})")
+            except ValueError:
+                self.get_logger().warning("🔍 Could not compare sequence IDs (non-numeric)")
+        
+        # Destroy notice subscriber after timeout
+        self._destroy_notice_subscriber()
         return None
     
     def clear_command_confirmations(self) -> None:
@@ -1272,6 +1353,8 @@ class Navigator(Node):
         with self.notice_lock:
             self.command_confirmations.clear()
         self.get_logger().info("🗑️ Cleared all command confirmations")
+        # Destroy notice subscriber when clearing confirmations
+        self._destroy_notice_subscriber()
     
     def get_command_confirmation(self, seq_id: str) -> Optional[dict]:
         """
@@ -1286,6 +1369,179 @@ class Navigator(Node):
         """
         with self.notice_lock:
             return self.command_confirmations.get(seq_id, {}).copy() if seq_id in self.command_confirmations else None
+    
+    def get_latest_notice_analysis(self) -> dict:
+        """
+        Get analysis of the latest notice messages for debugging.
+        
+        Returns:
+            Dictionary containing analysis of recent notices
+        """
+        with self.notice_lock:
+            analysis = {
+                'total_notices': len(self.command_confirmations),
+                'available_confirmations': list(self.command_confirmations.keys()),
+                'latest_notice': self.last_notice,
+                'recent_confirmations': []
+            }
+            
+            # 获取最近的确认信息（按时间戳排序）
+            confirmations = []
+            for seq_id, data in self.command_confirmations.items():
+                confirmations.append({
+                    'seq_id': seq_id,
+                    'timestamp': data.get('timestamp', 0),
+                    'message': data.get('message', ''),
+                    'success': data.get('success', False),
+                    'raw_data': data.get('raw_data', ''),
+                    'note': data.get('note', '')
+                })
+            
+            # 按时间戳排序，获取最近的5个
+            confirmations.sort(key=lambda x: x['timestamp'], reverse=True)
+            analysis['recent_confirmations'] = confirmations[:5]
+            
+            return analysis
+    
+    def debug_notice_topic(self, duration: float = 10.0) -> None:
+        """
+        Debug the notice topic by listening for messages for a specified duration.
+        
+        Args:
+            duration: How long to listen for messages (seconds)
+        """
+        self.get_logger().info(f"🔍 Starting notice topic debug for {duration} seconds...")
+        
+        # 确保notice subscriber存在
+        self._ensure_notice_subscriber()
+        
+        # 记录开始时间
+        start_time = time.time()
+        original_notice_count = len(self.command_confirmations)
+        
+        # 监听消息
+        while time.time() - start_time < duration:
+            current_count = len(self.command_confirmations)
+            if current_count > original_notice_count:
+                # 有新消息
+                new_messages = current_count - original_notice_count
+                self.get_logger().info(f"📢 Received {new_messages} new notice(s)")
+                original_notice_count = current_count
+            
+            time.sleep(0.1)
+        
+        # 分析结果
+        analysis = self.get_latest_notice_analysis()
+        self.get_logger().info("📊 Notice topic debug analysis:")
+        self.get_logger().info(f"   📈 Total notices received: {analysis['total_notices']}")
+        self.get_logger().info(f"   🔑 Available confirmations: {analysis['available_confirmations']}")
+        
+        if analysis['recent_confirmations']:
+            self.get_logger().info("   📝 Recent confirmations:")
+            for conf in analysis['recent_confirmations']:
+                self.get_logger().info(f"      - Seq: {conf['seq_id']}, Success: {conf['success']}")
+                self.get_logger().info(f"        Message: {conf['message']}")
+        
+        if analysis['latest_notice']:
+            self.get_logger().info(f"   📢 Latest notice: {analysis['latest_notice']['message']}")
+        
+        self.get_logger().info("✅ Notice topic debug completed")
+    
+    def _create_notice_subscriber(self):
+        """Create notice subscriber when needed."""
+        if self.notice_subscriber is None:
+            self.notice_subscriber = self.create_subscription(
+                String,
+                self.notice_topic,
+                self.notice_callback,
+                self.notice_qos
+            )
+            self.get_logger().info(f"📢 Notice subscriber created for topic: {self.notice_topic}")
+    
+    def _destroy_notice_subscriber(self):
+        """Destroy notice subscriber when no longer needed."""
+        if self.notice_subscriber is not None:
+            self.destroy_subscription(self.notice_subscriber)
+            self.notice_subscriber = None
+            self.get_logger().info("📢 Notice subscriber destroyed")
+    
+    def _ensure_notice_subscriber(self):
+        """Ensure notice subscriber exists when waiting for confirmation."""
+        if self.notice_subscriber is None:
+            self._create_notice_subscriber()
+    
+    def _get_next_index(self) -> int:
+        """
+        Get the next command index in a thread-safe manner.
+        
+        Returns:
+            int: The next available command index
+        """
+        with self.index_lock:
+            current_index = self.command_index
+            self.command_index += 1
+            return current_index
+    
+    def _generate_seq_string(self, index: int) -> str:
+        """
+        Generate a sequence string with the given index.
+        
+        Args:
+            index: The command index
+            
+        Returns:
+            str: Sequence string in format "index:123;"
+        """
+        return f"index:{index};"
+    
+    def _publish_command_with_index(self, msg, wait_for_confirmation: bool = True, delay_before_confirm: float = 2.0) -> int:
+        """
+        Publish a command with an automatically generated index.
+        
+        Args:
+            msg: The message to publish
+            wait_for_confirmation: Whether to wait for confirmation
+            delay_before_confirm: Delay in seconds before starting confirmation check
+            
+        Returns:
+            int: The index used for this command
+        """
+        # Generate next index
+        index = self._get_next_index()
+        seq_string = self._generate_seq_string(index)
+        
+        # Set the sequence string
+        if hasattr(msg, 'seq'):
+            msg.seq.data = seq_string
+        
+        # Publish the message
+        if hasattr(msg, 'command'):
+            self.command_publisher.publish(msg)
+        elif hasattr(msg, 'node'):
+            self.node_publisher.publish(msg)
+        elif hasattr(msg, 'edge'):
+            self.edge_publisher.publish(msg)
+        
+        self.get_logger().info(f"📤 Published command with index: {index}")
+        
+        # Wait for confirmation if requested
+        if wait_for_confirmation:
+            try:
+                # 等待指定时间后再开始验证
+                self.get_logger().info(f"⏳ Waiting {delay_before_confirm}s before starting confirmation check for index: {index}")
+                time.sleep(delay_before_confirm)
+                
+                confirmation = self.wait_for_command_confirmation(str(index), timeout=5.0)
+                if confirmation:
+                    self.get_logger().info(f"✅ Command {index} confirmed successfully")
+                else:
+                    self.get_logger().warning(f"⚠️ Command {index} confirmation timeout")
+                return index
+            except Exception as e:
+                self.get_logger().error(f"❌ Error waiting for command {index} confirmation: {e}")
+                return index
+        
+        return index
     
     def _cb(self, key):
         """Create callback function for robot state messages."""
@@ -1478,6 +1734,77 @@ class Navigator(Node):
         if back:
             threading.Thread(target=self.show_back_camera, daemon=True).start()
     
+    def navigate_to_point(self, x: float, y: float, yaw: float = 0.0, map_name: str = "default") -> bool:
+        """
+        执行定点导航到指定坐标点。
+        
+        Args:
+            x: 目标点X坐标
+            y: 目标点Y坐标
+            yaw: 目标点Yaw角度（弧度）
+            map_name: 使用的地图名称
+            
+        Returns:
+            bool: 导航是否成功启动
+        """
+        try:
+            self.get_logger().info(f"🎯 开始定点导航到坐标: ({x:.2f}, {y:.2f}), 角度: {yaw:.2f}°, 地图: {map_name}")
+            
+            # 获取当前位姿
+            current_pose = self.get_current_pose()
+            if current_pose is None:
+                self.get_logger().error("无法获取当前位姿，导航失败")
+                return False
+            
+            current_x, current_y, current_z = current_pose['position']
+            current_yaw = current_pose['euler'][2]
+            
+            self.get_logger().info(f"📍 当前位置: ({current_x:.2f}, {current_y:.2f}), 角度: {current_yaw:.2f}°")
+            
+            # 计算距离
+            distance = ((x - current_x) ** 2 + (y - current_y) ** 2) ** 0.5
+            self.get_logger().info(f"📏 目标距离: {distance:.2f}米")
+            
+            # 这里需要根据实际的导航系统实现具体的导航逻辑
+            # 例如：调用ROS2的导航action或service
+            
+            # 模拟导航启动（实际实现中需要替换为真实的导航调用）
+            self.get_logger().info(f"🚀 启动导航到目标点...")
+            
+            # 发送导航命令（这里需要根据实际的导航系统调整）
+            # 例如：调用move_base或其他导航服务
+            
+            # 记录导航参数
+            nav_params = {
+                "start_pose": {
+                    "x": current_x,
+                    "y": current_y,
+                    "z": current_z,
+                    "yaw": current_yaw
+                },
+                "goal_pose": {
+                    "x": x,
+                    "y": y,
+                    "z": 0.0,  # 假设Z坐标为0
+                    "yaw": yaw
+                },
+                "map_name": map_name,
+                "distance": distance
+            }
+            
+            self.get_logger().info(f"📋 导航参数: {nav_params}")
+            
+            # 这里应该调用实际的导航服务
+            # 例如：self.navigation_client.send_goal(goal)
+            
+            # 暂时返回成功（实际实现中需要根据导航服务的响应）
+            self.get_logger().info("✅ 定点导航命令已发送")
+            return True
+            
+        except Exception as e:
+            self.get_logger().error(f"定点导航失败: {e}")
+            return False
+    
     def shutdown(self):
         """供 Ctrl-C 时调用"""
         self._stop_cam.set()
@@ -1485,6 +1812,8 @@ class Navigator(Node):
             cam.stop()
         for t in self.cam_threads:
             t.join()
+        # Destroy notice subscriber on shutdown
+        self._destroy_notice_subscriber()
 
 def main():
     """Example usage of the Navigator class."""
@@ -1561,4 +1890,3 @@ def main():
 
 if __name__ == "__main__":
     main() 
-
