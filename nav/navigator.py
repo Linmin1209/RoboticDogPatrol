@@ -8,15 +8,88 @@ of a robotic dog, including mapping, navigation, node/edge management, and pose 
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 from unitree_interfaces.msg import QtCommand, QtEdge, QtNode
 from std_msgs.msg import String
-from sensor_msgs.msg import PointCloud2
+from sensor_msgs.msg import PointCloud2, Imu
 from nav_msgs.msg import Odometry
-from typing import List, Optional, Tuple
+from unitree_go.msg import SportModeState, LowState
+from typing import List, Optional, Tuple, Dict
 import numpy as np
 import open3d as o3d
 import threading
 import time
+import json
+import cv2
+import base64
+from dataclasses import dataclass
+
+
+@dataclass
+class CameraFrame:
+    """单个相机最新帧的完整信息"""
+    camera_id: int          # 设备唯一 ID
+    name: str               # 逻辑名称，如 front / back / arm_left
+    mode: str               # 当前模式 RGB / DEPTH / WIDE
+    frame: Optional[np.ndarray] = None   # 原始 numpy 帧
+    status: bool = False    # True: 正常取流  False: 异常
+
+
+class Camera:
+    """
+    通用相机类。目前支持：
+        - RGB 彩色
+        - DEPTH 深度（预留：可把 16bit 深度图转 8bit 伪彩）
+        - WIDE  广角（预留：可把原始图像做畸变矫正）
+    新增机械臂相机时，只需：
+        1. 新建一个 Camera 实例
+        2. 把实例注册到 Navigator.cameras 字典
+    """
+    def __init__(self,
+                 name: str,
+                 uri: str,
+                 camera_id: Optional[int] = None,
+                 default_mode: str = "RGB"):
+        self.name = name
+        self.uri = uri
+        self.camera_id = camera_id or abs(hash(name)) % (10**8)  # 简易唯一 ID
+        self.default_mode = default_mode.upper()
+        self._latest = CameraFrame(camera_id=self.camera_id,
+                                   name=name,
+                                   mode=self.default_mode)
+        self._stop_evt = threading.Event()
+
+    @property
+    def latest(self) -> CameraFrame:
+        return self._latest
+
+    def _worker(self):
+        pipeline = (
+            f"rtspsrc location={self.uri} latency=0 ! "
+            "rtph264depay ! h264parse ! avdec_h264 ! "
+            "videoconvert ! appsink"
+        )
+        cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+        if not cap.isOpened():
+            self._latest.status = False
+            return
+
+        self._latest.status = True
+        while not self._stop_evt.is_set():
+            ret, frame = cap.read()
+            if ret:
+                self._latest.frame = frame
+                self._latest.status = True
+            else:
+                self._latest.status = False
+                time.sleep(0.01)
+        cap.release()
+
+    def start(self):
+        threading.Thread(target=self._worker, daemon=True).start()
+
+    def stop(self):
+        self._stop_evt.set()
 
 
 class Navigator(Node):
@@ -35,6 +108,7 @@ class Navigator(Node):
                  command_topic: str = "/qt_command",
                  add_node_topic: str = "/qt_add_node",
                  add_edge_topic: str = "/qt_add_edge",
+                 notice_topic: str = "/qt_notice",
                  cloud_topic: str = "/lio_sam_ros2/mapping/cloud_registered",
                  trajectory_topic: str = "/lio_sam_ros2/mapping/trajectory",
                  odometry_topic: str = "/lio_sam_ros2/mapping/odometry",
@@ -47,6 +121,7 @@ class Navigator(Node):
             command_topic: Topic for sending QtCommand messages
             add_node_topic: Topic for adding nodes
             add_edge_topic: Topic for adding edges
+            notice_topic: Topic for receiving command execution notices
             cloud_topic: Topic for point cloud data
             trajectory_topic: Topic for trajectory data
             odometry_topic: Topic for odometry data
@@ -58,12 +133,19 @@ class Navigator(Node):
         self.command_publisher = self.create_publisher(QtCommand, command_topic, 10)
         self.node_publisher = self.create_publisher(QtNode, add_node_topic, 10)
         self.edge_publisher = self.create_publisher(QtEdge, add_edge_topic, 10)
+        self.query_result_node_publisher = self.create_publisher(String, "/query_result_node", 10)
+        self.query_result_edge_publisher = self.create_publisher(String, "/query_result_edge", 10)
         
         # Current pose storage
         self.current_pose = None
         self.pose_lock = threading.Lock()
         self.last_pose_update_time = 0.0
         self.pose_timeout = 0.5  # 0.5 seconds timeout for pose data
+        
+        # Command execution feedback storage
+        self.last_notice = None
+        self.notice_lock = threading.Lock()
+        self.command_confirmations = {}  # Store command confirmations by sequence
         
         # Create subscriber for odometry
         self.odometry_subscriber = self.create_subscription(
@@ -72,6 +154,73 @@ class Navigator(Node):
             self.odometry_callback,
             1
         )
+        
+        # Create subscriber for qt_notice feedback
+        self.notice_subscriber = self.create_subscription(
+            String,
+            notice_topic,
+            self.notice_callback,
+            10
+        )
+        
+        # Setup QoS profile for robot state subscriptions
+        qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=10
+        )
+        
+        # Robot state message cache
+        self.msg_cache = {
+            'lowstate': None,
+            'odom': None,
+            'imu': None,
+            'sport': None,
+            'slam': None,
+            'control': None,
+            'network': None
+        }
+        
+        # Additional robot state subscribers
+        self.lowstate_subscriber = self.create_subscription(
+            LowState, '/lf/lowstate', self._cb('lowstate'), qos)
+        self.dog_odom_subscriber = self.create_subscription(
+            Odometry, '/dog_odom', self._cb('odom'), qos)
+        self.dog_imu_subscriber = self.create_subscription(
+            Imu, '/dog_imu_raw', self._cb('imu'), qos)
+        self.sport_subscriber = self.create_subscription(
+            SportModeState, '/sportmodestate', self._cb('sport'), qos)
+        self.slam_info_subscriber = self.create_subscription(
+            String, '/slam_info', self._cb('slam'), qos)
+        self.control_feedback_subscriber = self.create_subscription(
+            String, '/control_feedback', self._cb('control'), qos)
+        self.network_status_subscriber = self.create_subscription(
+            String, '/public_network_status', self._cb('network'), qos)
+        
+        # Camera management
+        self.cameras: Dict[str, Camera] = {}
+        self.cameras["front"] = Camera("front", "rtsp://192.168.123.161:8551/front_video")
+        self.cameras["back"] = Camera("back", "rtsp://192.168.123.161:8552/back_video")
+        
+        # Start camera streams
+        for cam in self.cameras.values():
+            cam.start()
+        
+        # Additional frame storage for backward compatibility
+        self.front_frame = None
+        self.back_frame = None
+        self._stop_cam = threading.Event()
+        
+        # Start legacy camera threads
+        self.cam_threads = []
+        self.cam_threads.append(threading.Thread(target=self._cam_worker,
+                                                 args=("front", "rtsp://192.168.123.161:8551/front_video"),
+                                                 daemon=True))
+        self.cam_threads.append(threading.Thread(target=self._cam_worker,
+                                                 args=("back", "rtsp://192.168.123.161:8552/back_video"),
+                                                 daemon=True))
+        for t in self.cam_threads:
+            t.start()
         
         # Point cloud visualization setup
         self.enable_visualization = enable_visualization
@@ -107,6 +256,9 @@ class Navigator(Node):
             self.get_logger().info(f"🛤️ Trajectory visualization enabled on topic: {trajectory_topic}")
         
         self.get_logger().info(f"📍 Odometry subscription enabled on topic: {odometry_topic}")
+        self.get_logger().info(f"📢 Notice subscription enabled on topic: {notice_topic}")
+        self.get_logger().info("📷 Camera streams initialized (front/back)")
+        self.get_logger().info("🤖 Robot state subscriptions enabled")
         self.get_logger().info("🚀 Navigator initialized successfully")
     
     def start_mapping(self, seq: str = "index:123;", attribute: int = 0) -> None:
@@ -125,6 +277,14 @@ class Navigator(Node):
         
         self.command_publisher.publish(msg)
         self.get_logger().info("🗺️ Sent start mapping command")
+        
+        # Wait for confirmation if sequence is provided
+        if seq and 'index:' in seq:
+            try:
+                seq_id = seq.split('index:')[1].split(';')[0]
+                self.wait_for_command_confirmation(seq_id, timeout=3.0)
+            except Exception as e:
+                self.get_logger().warning(f"Could not extract sequence ID for confirmation: {e}")
     
     def end_mapping(self, seq: str = "index:123;", 
                    floor_index: int = 0, pcdmap_index: int = 0) -> None:
@@ -145,6 +305,14 @@ class Navigator(Node):
         
         self.command_publisher.publish(msg)
         self.get_logger().info(f"✅ Sent end mapping command (floor={floor_index}, map={pcdmap_index})")
+        
+        # Wait for confirmation if sequence is provided
+        if seq and 'index:' in seq:
+            try:
+                seq_id = seq.split('index:')[1].split(';')[0]
+                self.wait_for_command_confirmation(seq_id, timeout=3.0)
+            except Exception as e:
+                self.get_logger().warning(f"Could not extract sequence ID for confirmation: {e}")
     
     def start_navigation(self, seq: str = "index:123;") -> None:
         """
@@ -159,6 +327,14 @@ class Navigator(Node):
         
         self.command_publisher.publish(msg)
         self.get_logger().info("🚀 Sent start navigation command")
+        
+        # Wait for confirmation if sequence is provided
+        if seq and 'index:' in seq:
+            try:
+                seq_id = seq.split('index:')[1].split(';')[0]
+                self.wait_for_command_confirmation(seq_id, timeout=3.0)
+            except Exception as e:
+                self.get_logger().warning(f"Could not extract sequence ID for confirmation: {e}")
     
     def pause_navigation(self, seq: str = "index:123;") -> None:
         """
@@ -174,7 +350,142 @@ class Navigator(Node):
         
         self.command_publisher.publish(msg)
         self.get_logger().info("⏸️ Sent pause navigation command")
+        
+        # Wait for confirmation if sequence is provided
+        if seq and 'index:' in seq:
+            try:
+                seq_id = seq.split('index:')[1].split(';')[0]
+                self.wait_for_command_confirmation(seq_id, timeout=3.0)
+            except Exception as e:
+                self.get_logger().warning(f"Could not extract sequence ID for confirmation: {e}")
     
+    def query_node(self, seq: str = "index:123;", attribute = 1) -> bool:
+        """
+        Query navigation nodes.
+        
+        Args:
+            seq: Sequence identifier
+            attribute: Query attribute (default: 1 for nodes)
+            
+        Returns:
+            bool: True if command was sent and confirmed successfully, False otherwise
+        """
+        try:
+            msg = QtCommand()
+            msg.seq = String()
+            msg.seq.data = seq
+            msg.command = 2
+            msg.attribute = attribute
+            msg.floor_index.append(999)
+            msg.node_edge_name.append(999)
+            self.command_publisher.publish(msg)
+            self.get_logger().info("▶️ Sent query node command")
+            
+            # Wait for command confirmation
+            if seq and 'index:' in seq:
+                try:
+                    seq_id = seq.split('index:')[1].split(';')[0]
+                    confirmation = self.wait_for_command_confirmation(seq_id, timeout=3.0)
+                    if confirmation:
+                        # Publish query result to feedback topic
+                        result_msg = String()
+                        result_msg.data = json.dumps({
+                            "seq": seq,
+                            "command": "query_node",
+                            "attribute": attribute,
+                            "status": "success" if confirmation.get('success', False) else "failed",
+                            "message": confirmation.get('message', ''),
+                            "timestamp": time.time()
+                        })
+                        self.query_result_node_publisher.publish(result_msg)
+                        self.get_logger().info(f"📤 Published query node result: {confirmation.get('message', '')}")
+                        return confirmation.get('success', False)
+                    else:
+                        # Publish timeout result
+                        result_msg = String()
+                        result_msg.data = json.dumps({
+                            "seq": seq,
+                            "command": "query_node",
+                            "attribute": attribute,
+                            "status": "timeout",
+                            "message": "Command confirmation timeout",
+                            "timestamp": time.time()
+                        })
+                        self.query_result_node_publisher.publish(result_msg)
+                        self.get_logger().warning("⏰ Query node command confirmation timeout")
+                        return False
+                except Exception as e:
+                    self.get_logger().warning(f"Could not extract sequence ID for confirmation: {e}")
+                    return True  # Command was sent successfully even if confirmation failed
+            return True
+        except Exception as e:
+            self.get_logger().error(f"Error sending query node command: {e}")
+            return False
+    
+    def query_edge(self, seq: str = "index:123;", attribute = 2) -> bool:
+        """
+        Query navigation edges.
+        
+        Args:
+            seq: Sequence identifier
+            attribute: Query attribute (default: 2 for edges)
+            
+        Returns:
+            bool: True if command was sent and confirmed successfully, False otherwise
+        """
+        try:
+            msg = QtCommand()
+            msg.seq = String()
+            msg.seq.data = seq
+            msg.command = 2
+            msg.attribute = attribute
+            msg.floor_index.append(999)
+            msg.node_edge_name.append(999)
+            self.command_publisher.publish(msg)
+            self.get_logger().info("▶️ Sent query edge command")
+            
+            # Wait for command confirmation
+            if seq and 'index:' in seq:
+                try:
+                    seq_id = seq.split('index:')[1].split(';')[0]
+                    confirmation = self.wait_for_command_confirmation(seq_id, timeout=3.0)
+                    if confirmation:
+                        # Publish query result to feedback topic
+                        result_msg = String()
+                        result_msg.data = json.dumps({
+                            "seq": seq,
+                            "command": "query_edge",
+                            "attribute": attribute,
+                            "status": "success" if confirmation.get('success', False) else "failed",
+                            "message": confirmation.get('message', ''),
+                            "timestamp": time.time()
+                        })
+                        self.query_result_edge_publisher.publish(result_msg)
+                        self.get_logger().info(f"📤 Published query edge result: {confirmation.get('message', '')}")
+                        return confirmation.get('success', False)
+                    else:
+                        # Publish timeout result
+                        result_msg = String()
+                        result_msg.data = json.dumps({
+                            "seq": seq,
+                            "command": "query_edge",
+                            "attribute": attribute,
+                            "status": "timeout",
+                            "message": "Command confirmation timeout",
+                            "timestamp": time.time()
+                        })
+                        self.query_result_edge_publisher.publish(result_msg)
+                        self.get_logger().warning("⏰ Query edge command confirmation timeout")
+                        return False
+                except Exception as e:
+                    self.get_logger().warning(f"Could not extract sequence ID for confirmation: {e}")
+                    return True  # Command was sent successfully even if confirmation failed
+            return True
+        except Exception as e:
+            self.get_logger().error(f"Error sending query edge command: {e}")
+            return False
+
+
     def recover_navigation(self, seq: str = "index:123;") -> None:
         """
         Recover/resume navigation.
@@ -189,6 +500,14 @@ class Navigator(Node):
         
         self.command_publisher.publish(msg)
         self.get_logger().info("▶️ Sent recover navigation command")
+        
+        # Wait for confirmation if sequence is provided
+        if seq and 'index:' in seq:
+            try:
+                seq_id = seq.split('index:')[1].split(';')[0]
+                self.wait_for_command_confirmation(seq_id, timeout=3.0)
+            except Exception as e:
+                self.get_logger().warning(f"Could not extract sequence ID for confirmation: {e}")
     
     def add_node(self, node_name: int, x: float, y: float, z: float = 0.0, 
                 yaw: float = 1.57, seq: str = "index:123;") -> None:
@@ -220,6 +539,14 @@ class Navigator(Node):
         
         self.node_publisher.publish(msg)
         self.get_logger().info(f"✅ Added node {node_name} at ({x}, {y}, {z}) with yaw {yaw}")
+        
+        # Wait for confirmation if sequence is provided
+        if seq and 'index:' in seq:
+            try:
+                seq_id = seq.split('index:')[1].split(';')[0]
+                self.wait_for_command_confirmation(seq_id, timeout=3.0)
+            except Exception as e:
+                self.get_logger().warning(f"Could not extract sequence ID for confirmation: {e}")
     
     def delete_node(self, node_ids: List[int], seq: str = "index:123;") -> None:
         """
@@ -271,6 +598,14 @@ class Navigator(Node):
         
         self.edge_publisher.publish(msg)
         self.get_logger().info(f"✅ Added edge {edge_name} from node {start_node} to {end_node}")
+        
+        # Wait for confirmation if sequence is provided
+        if seq and 'index:' in seq:
+            try:
+                seq_id = seq.split('index:')[1].split(';')[0]
+                self.wait_for_command_confirmation(seq_id, timeout=3.0)
+            except Exception as e:
+                self.get_logger().warning(f"Could not extract sequence ID for confirmation: {e}")
     
     def delete_edge(self, edge_ids: List[int], seq: str = "index:123;") -> None:
         """
@@ -319,6 +654,14 @@ class Navigator(Node):
         
         self.command_publisher.publish(msg)
         self.get_logger().info(f"📍 Sent pose init command at {translation}")
+        
+        # Wait for confirmation if sequence is provided
+        if seq and 'index:' in seq:
+            try:
+                seq_id = seq.split('index:')[1].split(';')[0]
+                self.wait_for_command_confirmation(seq_id, timeout=3.0)
+            except Exception as e:
+                self.get_logger().warning(f"Could not extract sequence ID for confirmation: {e}")
     
     def start_relocation(self, seq: str = "index:123;", attribute: int = 0) -> None:
         """
@@ -336,6 +679,14 @@ class Navigator(Node):
         
         self.command_publisher.publish(msg)
         self.get_logger().info("📍 Sent start relocation command")
+        
+        # Wait for confirmation if sequence is provided
+        if seq and 'index:' in seq:
+            try:
+                seq_id = seq.split('index:')[1].split(';')[0]
+                self.wait_for_command_confirmation(seq_id, timeout=3.0)
+            except Exception as e:
+                self.get_logger().warning(f"Could not extract sequence ID for confirmation: {e}")
     
     def delete_all_nodes(self, seq: str = "index:123;") -> None:
         """
@@ -746,6 +1097,48 @@ class Navigator(Node):
                 
         except Exception as e:
             self.get_logger().error(f"Error processing odometry: {e}")
+    
+    def notice_callback(self, msg: String) -> None:
+        """
+        Callback function for processing qt_notice messages.
+        
+        Args:
+            msg: String message containing command execution feedback
+        """
+        try:
+            with self.notice_lock:
+                self.last_notice = {
+                    'message': msg.data,
+                    'timestamp': time.time()
+                }
+                
+                # Parse the notice message to extract sequence and status
+                # Expected format: "seq:index:123; status:success" or similar
+                notice_data = msg.data
+                self.get_logger().info(f"📢 Received notice: {notice_data}")
+                
+                # Extract sequence ID if present
+                if 'index:' in notice_data:
+                    try:
+                        seq_start = notice_data.find('index:') + 6
+                        seq_end = notice_data.find(';', seq_start)
+                        if seq_end == -1:
+                            seq_end = len(notice_data)
+                        seq_id = notice_data[seq_start:seq_end].strip()
+                        
+                        # Store confirmation for this sequence
+                        self.command_confirmations[seq_id] = {
+                            'message': notice_data,
+                            'timestamp': time.time(),
+                            'success': 'success' in notice_data.lower() or 'ok' in notice_data.lower()
+                        }
+                        
+                        self.get_logger().info(f"✅ Command confirmation stored for sequence: {seq_id}")
+                    except Exception as e:
+                        self.get_logger().warning(f"Could not parse sequence from notice: {e}")
+                
+        except Exception as e:
+            self.get_logger().error(f"Error processing notice: {e}")
 
     def get_current_pose(self) -> Optional[dict]:
         """
@@ -838,7 +1231,260 @@ class Navigator(Node):
         self.add_node(node_name, position[0], position[1], position[2], yaw, seq)
         self.get_logger().info(f"📍 Added node {node_name} at current pose: ({position[0]:.2f}, {position[1]:.2f}, {position[2]:.2f}) with yaw {yaw:.2f}")
         return True
+    
+    def get_last_notice(self) -> Optional[dict]:
+        """
+        Get the most recent notice message.
+        
+        Returns:
+            Last notice dictionary with message and timestamp, or None if no notice received
+        """
+        with self.notice_lock:
+            return self.last_notice.copy() if self.last_notice else None
+    
+    def wait_for_command_confirmation(self, seq_id: str, timeout: float = 5.0) -> Optional[dict]:
+        """
+        Wait for command execution confirmation with specified timeout.
+        
+        Args:
+            seq_id: Sequence ID to wait for (e.g., "123")
+            timeout: Maximum time to wait in seconds
+            
+        Returns:
+            Confirmation data or None if timeout
+        """
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            with self.notice_lock:
+                if seq_id in self.command_confirmations:
+                    confirmation = self.command_confirmations[seq_id].copy()
+                    self.get_logger().info(f"✅ Received confirmation for sequence {seq_id}: {confirmation['message']}")
+                    return confirmation
+            time.sleep(0.1)  # Small delay to avoid busy waiting
+        
+        self.get_logger().warning(f"⏰ Timeout waiting for command confirmation (seq: {seq_id}, timeout: {timeout}s)")
+        return None
+    
+    def clear_command_confirmations(self) -> None:
+        """
+        Clear all stored command confirmations.
+        """
+        with self.notice_lock:
+            self.command_confirmations.clear()
+        self.get_logger().info("🗑️ Cleared all command confirmations")
+    
+    def get_command_confirmation(self, seq_id: str) -> Optional[dict]:
+        """
+        
+        Get command confirmation for a specific sequence ID.
+        
+        Args:
+            seq_id: Sequence ID to check
+            
+        Returns:
+            Confirmation data or None if not found
+        """
+        with self.notice_lock:
+            return self.command_confirmations.get(seq_id, {}).copy() if seq_id in self.command_confirmations else None
+    
+    def _cb(self, key):
+        """Create callback function for robot state messages."""
+        def callback(msg):
+            self.msg_cache[key] = msg
+        return callback
+    
+    def _cam_worker(self, name, uri):
+        """后台线程：持续拉流并缓存最新帧"""
+        pipeline = (
+            f"rtspsrc location={uri} latency=0 ! "
+            "rtph264depay ! h264parse ! avdec_h264 ! "
+            "videoconvert ! appsink"
+        )
+        cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+        if not cap.isOpened():
+            self.get_logger().error(f"❌ 无法打开{name}相机流: {uri}")
+            return
 
+        self.get_logger().info(f"✅ {name}相机已连接")
+        while not self._stop_cam.is_set():
+            ret, frame = cap.read()
+            if ret:
+                if name == "front":
+                    self.front_frame = frame
+                else:
+                    self.back_frame = frame
+            else:
+                time.sleep(0.01)
+        cap.release()
+    
+    def get_camera_data(self,
+                    camera_name: List[str],
+                    camera_mode: Optional[List[str]] = None) -> Dict:
+        """
+        按要求返回相机视频流数据
+        参数:
+            camera_name: ["front", "back", ...]
+            camera_mode: ["RGB", "DEPTH", ...]  缺省用相机自身的 default_mode
+        返回:
+            {
+                "data": {...},
+                "code": "000000" / 其他,
+                "message": "..."
+            }
+        """
+        # 1. 校验长度
+        if camera_mode is None:
+            camera_mode = [self.cameras[name].default_mode for name in camera_name]
+        if len(camera_name) != len(camera_mode):
+            return dict(code="400001", message="camera_name 与 camera_mode 长度不一致", data={})
+
+        data = {}
+        for name, mode in zip(camera_name, camera_mode):
+            if name not in self.cameras:
+                return dict(code="400002", message=f"未找到相机 {name}", data={})
+
+            cam = self.cameras[name]
+            latest = cam.latest
+            if not latest.status or latest.frame is None:
+                return dict(code="500001", message=f"相机 {name} 未准备好", data={})
+
+            # 2. 按模式处理帧
+            frame = latest.frame
+            mode_up = mode.upper()
+            if mode_up == "RGB":
+                pass  # 原始彩色
+            elif mode_up == "DEPTH":
+                # 示例：把 16bit 深度图转 8bit 伪彩（这里简单复制灰度）
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                frame = cv2.applyColorMap(frame, cv2.COLORMAP_JET)
+            elif mode_up == "WIDE":
+                # 示例：畸变矫正（预留）
+                pass
+            else:
+                return dict(code="400003", message=f"不支持的模式 {mode}", data={})
+
+            # 3. 编码为 jpg -> base64
+            ok, encoded = cv2.imencode(".jpg", frame)
+            if not ok:
+                return dict(code="500002", message=f"编码失败 {name}", data={})
+            b64_str = base64.b64encode(encoded.tobytes()).decode()
+
+            data[name] = dict(
+                camera_id=latest.camera_id,
+                video_data=b64_str,
+                status=latest.status
+            )
+
+        return dict(code="000000", message="success", data=data)
+    
+    def get_nav_state(self) -> Dict:
+        """
+        返回一个包含机器人状态的字典
+        """
+        odom = self.msg_cache['odom']
+        imu = self.msg_cache['imu']
+        low = self.msg_cache['lowstate']
+
+        # 默认值
+        status = {
+            "state": 1 if odom and imu and low else 0,
+            "nav_path": [],  # 当前不处理路径规划，可后续拓展
+            "pos": {"x":0, "y":0},
+            "yaw": 0.0,
+            "roll": 0.0,
+            "vx": 0.0,
+            "vy": 0.0,
+            "v_linear":0,
+            "vyaw": 0.0,
+            "position_signal": 0,  # 默认 0，可结合 GPS 话题或 slam_info 判断
+            "battery": 0.0,
+            "battery_cycles": 0, # 目前还未测试，先设置为完成一次任务需要10%的电量
+            "imu_temp": 0.0,
+            "temp_ntc1":0.0,
+            "temp_ntc2":0.0,
+            "battery_temp":0.0
+        }
+
+        if odom:
+            pos = odom.pose.pose.position
+            ori = odom.pose.pose.orientation
+            status["pos"] = {"x":pos.x, "y":pos.y}
+
+            # 四元数转欧拉角（roll, pitch, yaw）
+            import math
+            sinr_cosp = 2 * (ori.w * ori.x + ori.y * ori.z)
+            cosr_cosp = 1 - 2 * (ori.x**2 + ori.y**2)
+            roll = math.atan2(sinr_cosp, cosr_cosp)
+
+            siny_cosp = 2 * (ori.w * ori.z + ori.x * ori.y)
+            cosy_cosp = 1 - 2 * (ori.y**2 + ori.z**2)
+            yaw = math.atan2(siny_cosp, cosy_cosp)
+
+            status["roll"] = roll
+            status["yaw"] = yaw
+
+            lin = odom.twist.twist.linear
+            ang = odom.twist.twist.angular
+            if lin is not None:
+                status["vx"] = lin.x
+                status["vy"] = lin.y
+                status["v_linear"] = math.sqrt(lin.x**2 + lin.y**2)
+            else:
+                status["vx"] = status["vy"] = status["v_linear"] = 0.0
+                
+            if ang is not None:
+                status["vyaw"] = ang.z
+            else:
+                status["vyaw"] = 0.0
+
+        if low:
+            status["imu_temp"] = float(low.imu_state.temperature)
+            status["battery"] = float(low.bms_state.soc)
+            status["battery_cycles"] = int(status["battery"] / 10 )
+            status["temp_ntc1"] = float(low.temperature_ntc1)
+            status["temp_ntc2"] = float(low.temperature_ntc2)
+            status["battery_temp"] = float((low.bms_state.bq_ntc[0]+ low.bms_state.bq_ntc[1])/2)
+
+        return status
+    
+    def get_latest_frame(self, front=True):
+        """供外部调用，返回最新帧（Mat），若无返回 None"""
+        return self.front_frame if front else self.back_frame
+    
+    def show_front_camera(self):
+        """显示前相机视频流（按 q 退出）"""
+        while True:
+            frame = self.get_latest_frame(front=True)
+            if frame is not None:
+                cv2.imshow("Front Camera", frame)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+        cv2.destroyWindow("Front Camera")
+
+    def show_back_camera(self):
+        """显示后相机视频流（按 q 退出）"""
+        while True:
+            frame = self.get_latest_frame(front=False)
+            if frame is not None:
+                cv2.imshow("Back Camera", frame)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+        cv2.destroyWindow("Back Camera")
+    
+    def start_camera_display(self, front=True, back=False):
+        """启动一个线程显示相机窗口（非阻塞），默认开启前面的摄像头"""
+        if front:
+            threading.Thread(target=self.show_front_camera, daemon=True).start()
+        if back:
+            threading.Thread(target=self.show_back_camera, daemon=True).start()
+    
+    def shutdown(self):
+        """供 Ctrl-C 时调用"""
+        self._stop_cam.set()
+        for cam in self.cameras.values():
+            cam.stop()
+        for t in self.cam_threads:
+            t.join()
 
 def main():
     """Example usage of the Navigator class."""
@@ -911,6 +1557,10 @@ def main():
         navigator.stop_visualization()
         navigator.destroy_node()
         rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main() 
 
 
 if __name__ == "__main__":
