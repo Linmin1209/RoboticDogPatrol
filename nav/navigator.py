@@ -156,6 +156,13 @@ class Navigator(Node):
         self.command_index = 123  # Start from 123
         self.index_lock = threading.Lock()  # Thread-safe index management
         
+        # Internal node and edge storage for batch operations
+        self.internal_nodes = {}  # {node_id: {x, y, z, yaw, attribute, state_2, state_3, undefined}}
+        self.internal_edges = {}  # {edge_id: {start_node, end_node, dog_speed, edge_state_2, dog_stats, edge_length, dog_back_stats, edge_state, edge_state_1, edge_state_3, edge_state_4}}
+        self.nodes_lock = threading.Lock()  # Thread-safe node operations
+        self.edges_lock = threading.Lock()  # Thread-safe edge operations
+        self.batch_mode = False  # Flag to control batch operations
+        
         # Create subscriber for odometry
         self.odometry_subscriber = self.create_subscription(
             Odometry,
@@ -328,6 +335,23 @@ class Navigator(Node):
         
         return index
 
+    def start_single_navigation(self, node_id: int) -> int:
+        """
+        Start single navigation.
+        
+        Returns:
+            int: The command index used
+        """
+        msg = QtCommand()
+        msg.seq = String()
+        msg.command = 9 # Start Single Navigation
+        msg.node_edge_name.append(node_id)
+        
+        # Use automatic index management
+        index = self._publish_command_with_index(msg, wait_for_confirmation=True)
+        self.get_logger().info(f"🚀 Sent start single navigation command with index: {index}")
+        return index
+
     def default_navigation_loop(self) -> int:
         """
         Start navigation loop.
@@ -493,11 +517,75 @@ class Navigator(Node):
         self.get_logger().info(f"▶️ Sent recover navigation command with index: {index}")
         
         return index
+
+    def go_home(self) -> int:
+        """
+        Go home.
+        """
+        msg = QtCommand()
+        msg.seq = String()
+        msg.command = 15  # Go home command
+
+        index = self._publish_command_with_index(msg, wait_for_confirmation=True)
+        self.get_logger().info(f"▶️ Sent go home command with index: {index}")
+        return index
+    
+    def set_auto_nav(self, map_name: str = 'default', area: list = None, path_point: list = None) -> bool:
+        """
+        设置自动导航参数
+        
+        Args:
+            map_name: 使用的导航地图
+            area: 划定的导航区域范围
+            path_point: 设置的巡逻路径点
+            
+        Returns:
+            bool: 设置是否成功
+        """
+        try:
+            # 这里可以根据实际需求实现具体的设置逻辑
+            self.get_logger().info(f"设置自动导航参数: map={map_name}, area={area}, path_point={path_point}")
+            
+            # 示例实现 - 可以根据实际需求修改
+            if area:
+                self.get_logger().info(f"设置导航区域: {area}")
+            
+            if path_point:
+                self.get_logger().info(f"设置巡逻路径点: {path_point}")
+            
+            return True
+        except Exception as e:
+            self.get_logger().error(f"设置自动导航参数失败: {e}")
+            return False
+    
+    def start_navigation_loop(self, seq: str = "index:123;") -> bool:
+        """
+        开始循环导航
+        
+        Args:
+            seq: 序列号
+            
+        Returns:
+            bool: 启动是否成功
+        """
+        try:
+            msg = QtCommand()
+            msg.seq = String()
+            msg.command = 10  # 10 is multi nodes loop navigation command
+            msg.seq.data = seq
+            
+            # Use automatic index management
+            index = self._publish_command_with_index(msg, wait_for_confirmation=True)
+            self.get_logger().info(f"🔄 循环导航已启动，index: {index}")
+            return True
+        except Exception as e:
+            self.get_logger().error(f"启动循环导航失败: {e}")
+            return False
     
     def add_node(self, node_name: int, x: float, y: float, z: float = 0.0, 
-                yaw: float = 1.57) -> int:
+                yaw: float = 1.57, publish_immediately: bool = False) -> int:
         """
-        Add a navigation node.
+        Add a navigation node to internal storage.
         
         Args:
             node_name: Name/ID of the node
@@ -505,29 +593,48 @@ class Navigator(Node):
             y: Y coordinate
             z: Z coordinate (default: 0.0)
             yaw: Yaw angle in radians (default: 1.57)
+            publish_immediately: If True, publish immediately; if False, store internally
             
         Returns:
-            int: The command index used
+            int: The command index used (if published immediately) or 0 (if stored internally)
         """
-        msg = QtNode()
-        msg.seq = String()
-        msg.node.node_name.append(node_name)
-        msg.node.node_position_x.append(x)
-        msg.node.node_position_y.append(y)
-        msg.node.node_position_z.append(z)
-        msg.node.node_yaw.append(yaw)
-        
-        # Required fields
-        msg.node.node_attribute.append(0)
-        msg.node.undefined.append(0)
-        msg.node.node_state_2.append(0)
-        msg.node.node_state_3.append(0)
-        
-        # Use automatic index management
-        index = self._publish_command_with_index(msg, wait_for_confirmation=True)
-        self.get_logger().info(f"✅ Added node {node_name} at ({x}, {y}, {z}) with yaw {yaw}, index: {index}")
-        
-        return index
+        with self.nodes_lock:
+            # Store node data internally
+            self.internal_nodes[node_name] = {
+                'x': x,
+                'y': y,
+                'z': z,
+                'yaw': yaw,
+                'attribute': 0,
+                'undefined': 0,
+                'state_2': 0,
+                'state_3': 0
+            }
+            
+            self.get_logger().info(f"📍 Stored node {node_name} at ({x}, {y}, {z}) with yaw {yaw}")
+            
+            if publish_immediately:
+                # Publish immediately if requested
+                msg = QtNode()
+                msg.seq = String()
+                msg.node.node_name.append(node_name)
+                msg.node.node_position_x.append(x)
+                msg.node.node_position_y.append(y)
+                msg.node.node_position_z.append(z)
+                msg.node.node_yaw.append(yaw)
+                
+                # Required fields
+                msg.node.node_attribute.append(0)
+                msg.node.undefined.append(0)
+                msg.node.node_state_2.append(0)
+                msg.node.node_state_3.append(0)
+                
+                # Use automatic index management
+                index = self._publish_command_with_index(msg, wait_for_confirmation=True)
+                self.get_logger().info(f"✅ Published node {node_name} immediately, index: {index}")
+                return index
+            else:
+                return 0
     
     def delete_node(self, node_ids: List[int]) -> int:
         """
@@ -552,9 +659,9 @@ class Navigator(Node):
         return index
     
     def add_edge(self, edge_name: int, start_node: int, end_node: int, 
-                dog_speed: float = 1.0, seq: str = "index:123;") -> None:
+                dog_speed: float = 1.0, seq: str = "index:123;", publish_immediately: bool = False) -> int:
         """
-        Add a navigation edge.
+        Add a navigation edge to internal storage.
         
         Args:
             edge_name: Name/ID of the edge
@@ -562,30 +669,55 @@ class Navigator(Node):
             end_node: Ending node ID
             dog_speed: Speed of the dog (default: 1.0)
             seq: Sequence identifier
+            publish_immediately: If True, publish immediately; if False, store internally
+            
+        Returns:
+            int: The command index used (if published immediately) or 0 (if stored internally)
         """
-        msg = QtEdge()
-        msg.seq = String()
-        msg.seq.data = seq
-        msg.edge.edge_name.append(edge_name)
-        msg.edge.start_node_name.append(start_node)
-        msg.edge.end_node_name.append(end_node)
-        msg.edge.dog_speed.append(dog_speed)
-        
-        # Required fields
-        msg.edge.edge_state_2.append(0)  # 0: Stop
-        msg.edge.dog_stats.append(0)
-        msg.edge.edge_length.append(0.0)
-        msg.edge.dog_back_stats.append(0)
-        msg.edge.edge_state.append(0)
-        msg.edge.edge_state_1.append(0)
-        msg.edge.edge_state_3.append(0)
-        msg.edge.edge_state_4.append(0)
-        
-       # Use automatic index management
-        index = self._publish_command_with_index(msg, wait_for_confirmation=True)
-        self.get_logger().info(f"✅ Added edge {edge_name} from node {start_node} to {end_node}, index: {index}")
-        
-        return index
+        with self.edges_lock:
+            # Store edge data internally
+            self.internal_edges[edge_name] = {
+                'start_node': start_node,
+                'end_node': end_node,
+                'dog_speed': dog_speed,
+                'edge_state_2': 0,  # 0: Stop
+                'dog_stats': 0,
+                'edge_length': 0.0,
+                'dog_back_stats': 0,
+                'edge_state': 0,
+                'edge_state_1': 0,
+                'edge_state_3': 0,
+                'edge_state_4': 0
+            }
+            
+            self.get_logger().info(f"🔗 Stored edge {edge_name} from node {start_node} to {end_node} with speed {dog_speed}")
+            
+            if publish_immediately:
+                # Publish immediately if requested
+                msg = QtEdge()
+                msg.seq = String()
+                msg.seq.data = seq
+                msg.edge.edge_name.append(edge_name)
+                msg.edge.start_node_name.append(start_node)
+                msg.edge.end_node_name.append(end_node)
+                msg.edge.dog_speed.append(dog_speed)
+                
+                # Required fields
+                msg.edge.edge_state_2.append(0)  # 0: Stop
+                msg.edge.dog_stats.append(0)
+                msg.edge.edge_length.append(0.0)
+                msg.edge.dog_back_stats.append(0)
+                msg.edge.edge_state.append(0)
+                msg.edge.edge_state_1.append(0)
+                msg.edge.edge_state_3.append(0)
+                msg.edge.edge_state_4.append(0)
+                
+                # Use automatic index management
+                index = self._publish_command_with_index(msg, wait_for_confirmation=True)
+                self.get_logger().info(f"✅ Published edge {edge_name} immediately, index: {index}")
+                return index
+            else:
+                return 0
     
     def delete_edge(self, edge_ids: List[int]) -> int:
         """
@@ -609,6 +741,235 @@ class Navigator(Node):
         
         return index
     
+    def publish_all_nodes(self) -> int:
+        """
+        Publish all internally stored nodes to the system.
+        
+        Returns:
+            int: The command index used
+        """
+        with self.nodes_lock:
+            if not self.internal_nodes:
+                self.get_logger().warning("⚠️ No nodes to publish")
+                return 0
+            
+            msg = QtNode()
+            msg.seq = String()
+            
+            # Add all nodes to the message
+            for node_id, node_data in self.internal_nodes.items():
+                msg.node.node_name.append(node_id)
+                msg.node.node_position_x.append(node_data['x'])
+                msg.node.node_position_y.append(node_data['y'])
+                msg.node.node_position_z.append(node_data['z'])
+                msg.node.node_yaw.append(node_data['yaw'])
+                msg.node.node_attribute.append(node_data['attribute'])
+                msg.node.undefined.append(node_data['undefined'])
+                msg.node.node_state_2.append(node_data['state_2'])
+                msg.node.node_state_3.append(node_data['state_3'])
+            
+            # Use automatic index management
+            index = self._publish_command_with_index(msg, wait_for_confirmation=True)
+            self.get_logger().info(f"✅ Published {len(self.internal_nodes)} nodes, index: {index}")
+            
+            return index
+    
+    def publish_all_edges(self) -> int:
+        """
+        Publish all internally stored edges to the system.
+        
+        Returns:
+            int: The command index used
+        """
+        with self.edges_lock:
+            if not self.internal_edges:
+                self.get_logger().warning("⚠️ No edges to publish")
+                return 0
+            
+            msg = QtEdge()
+            msg.seq = String()
+            
+            # Add all edges to the message
+            for edge_id, edge_data in self.internal_edges.items():
+                msg.edge.edge_name.append(edge_id)
+                msg.edge.start_node_name.append(edge_data['start_node'])
+                msg.edge.end_node_name.append(edge_data['end_node'])
+                msg.edge.dog_speed.append(edge_data['dog_speed'])
+                msg.edge.edge_state_2.append(edge_data['edge_state_2'])
+                msg.edge.dog_stats.append(edge_data['dog_stats'])
+                msg.edge.edge_length.append(edge_data['edge_length'])
+                msg.edge.dog_back_stats.append(edge_data['dog_back_stats'])
+                msg.edge.edge_state.append(edge_data['edge_state'])
+                msg.edge.edge_state_1.append(edge_data['edge_state_1'])
+                msg.edge.edge_state_3.append(edge_data['edge_state_3'])
+                msg.edge.edge_state_4.append(edge_data['edge_state_4'])
+            
+            # Use automatic index management
+            index = self._publish_command_with_index(msg, wait_for_confirmation=True)
+            self.get_logger().info(f"✅ Published {len(self.internal_edges)} edges, index: {index}")
+            
+            return index
+    
+    def publish_all_nodes_and_edges(self) -> tuple[int, int]:
+        """
+        Publish all internally stored nodes and edges to the system.
+        Nodes are published first, then edges.
+        
+        Returns:
+            tuple[int, int]: (node_command_index, edge_command_index)
+        """
+        self.get_logger().info("🚀 Publishing all stored nodes and edges...")
+        
+        # Publish nodes first
+        node_index = self.publish_all_nodes()
+        
+        # Wait a bit for nodes to be processed
+        time.sleep(0.5)
+        
+        # Then publish edges
+        edge_index = self.publish_all_edges()
+        
+        self.get_logger().info(f"✅ Published all nodes and edges - Node index: {node_index}, Edge index: {edge_index}")
+        return node_index, edge_index
+    
+    def clear_internal_nodes(self) -> None:
+        """Clear all internally stored nodes."""
+        with self.nodes_lock:
+            count = len(self.internal_nodes)
+            self.internal_nodes.clear()
+            self.get_logger().info(f"🗑️ Cleared {count} internally stored nodes")
+    
+    def clear_internal_edges(self) -> None:
+        """Clear all internally stored edges."""
+        with self.edges_lock:
+            count = len(self.internal_edges)
+            self.internal_edges.clear()
+            self.get_logger().info(f"🗑️ Cleared {count} internally stored edges")
+    
+    def clear_internal_storage(self) -> None:
+        """Clear all internally stored nodes and edges."""
+        self.clear_internal_nodes()
+        self.clear_internal_edges()
+    
+    def get_internal_nodes(self) -> dict:
+        """Get all internally stored nodes."""
+        with self.nodes_lock:
+            return self.internal_nodes.copy()
+    
+    def get_internal_edges(self) -> dict:
+        """Get all internally stored edges."""
+        with self.edges_lock:
+            return self.internal_edges.copy()
+    
+    def get_internal_storage_info(self) -> dict:
+        """Get information about internally stored nodes and edges."""
+        with self.nodes_lock:
+            with self.edges_lock:
+                return {
+                    'nodes_count': len(self.internal_nodes),
+                    'edges_count': len(self.internal_edges),
+                    'nodes': list(self.internal_nodes.keys()),
+                    'edges': list(self.internal_edges.keys())
+                }
+    
+    def remove_internal_node(self, node_id: int) -> bool:
+        """Remove a specific node from internal storage."""
+        with self.nodes_lock:
+            if node_id in self.internal_nodes:
+                del self.internal_nodes[node_id]
+                self.get_logger().info(f"🗑️ Removed node {node_id} from internal storage")
+                return True
+            else:
+                self.get_logger().warning(f"⚠️ Node {node_id} not found in internal storage")
+                return False
+    
+    def remove_internal_edge(self, edge_id: int) -> bool:
+        """Remove a specific edge from internal storage."""
+        with self.edges_lock:
+            if edge_id in self.internal_edges:
+                del self.internal_edges[edge_id]
+                self.get_logger().info(f"🗑️ Removed edge {edge_id} from internal storage")
+                return True
+            else:
+                self.get_logger().warning(f"⚠️ Edge {edge_id} not found in internal storage")
+                return False
+    
+    def navigate_to_point(self, x: float, y: float, yaw: float = 0.0, goal_node_id: int = None, map_name: str = "default") -> bool:
+        """
+        Navigate to a point.
+        
+        Args:
+            x: 目标点X坐标
+            y: 目标点Y坐标
+            yaw: 目标点Yaw角度（弧度）
+            goal_node_id: 目标节点ID（如果提供，则导航到节点）
+            map_name: 使用的地图名称
+            
+        Returns:
+            bool: 导航是否成功启动
+        """
+        try:
+            if goal_node_id is not None:
+                # 导航到指定节点
+                self.get_logger().info(f"🎯 开始导航到节点: {goal_node_id}")
+                result = self.start_single_navigation(goal_node_id)
+                return result > 0
+            else:
+                # 定点导航
+                self.get_logger().info(f"🎯 开始定点导航到坐标: ({x:.2f}, {y:.2f}), 角度: {yaw:.2f}°, 地图: {map_name}")
+                
+                # 获取当前位姿
+                current_pose = self.get_current_pose()
+                if current_pose is None:
+                    self.get_logger().error("无法获取当前位姿，导航失败")
+                    return False
+                
+                current_x, current_y, current_z = current_pose['position']
+                current_yaw = current_pose['euler'][2]
+                
+                self.get_logger().info(f"📍 当前位置: ({current_x:.2f}, {current_y:.2f}), 角度: {current_yaw:.2f}°")
+                
+                # 计算距离
+                distance = ((x - current_x) ** 2 + (y - current_y) ** 2) ** 0.5
+                self.get_logger().info(f"📏 目标距离: {distance:.2f}米")
+                
+                # 这里需要根据实际的导航系统实现具体的导航逻辑
+                # 例如：调用ROS2的导航action或service
+                
+                # 模拟导航启动（实际实现中需要替换为真实的导航调用）
+                self.get_logger().info(f"🚀 启动导航到目标点...")
+                
+                # 记录导航参数
+                nav_params = {
+                    "start_pose": {
+                        "x": current_x,
+                        "y": current_y,
+                        "z": current_z,
+                        "yaw": current_yaw
+                    },
+                    "goal_pose": {
+                        "x": x,
+                        "y": y,
+                        "z": 0.0,  # 假设Z坐标为0
+                        "yaw": yaw
+                    },
+                    "map_name": map_name,
+                    "distance": distance
+                }
+                
+                self.get_logger().info(f"📋 导航参数: {nav_params}")
+                
+                # 这里应该调用实际的导航服务
+                # 例如：self.navigation_client.send_goal(goal)
+                
+                # 暂时返回成功（实际实现中需要根据导航服务的响应）
+                self.get_logger().info("✅ 定点导航命令已发送")
+                return True
+                
+        except Exception as e:
+            self.get_logger().error(f"定点导航失败: {e}")
+            return False
+
     def pose_init(self, 
                  translation: Tuple[float, float, float] = (0.0, 0.0, 0.0),
                  quaternion: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0)) -> int:
@@ -1216,13 +1577,14 @@ class Navigator(Node):
         self.get_logger().warning(f"Timeout waiting for fresh pose data ({timeout}s)")
         return None
 
-    def add_node_at_current_pose(self, node_name: int, use_realtime: bool = True) -> tuple[bool, int]:
+    def add_node_at_current_pose(self, node_name: int, use_realtime: bool = True, publish_immediately: bool = False) -> tuple[bool, int]:
         """
         Add a navigation node at the current pose from odometry.
         
         Args:
             node_name: Name/ID of the node
             use_realtime: Whether to use realtime pose data with timeout check
+            publish_immediately: If True, publish immediately; if False, store internally
             
         Returns:
             tuple[bool, int]: (success, command_index)
@@ -1251,8 +1613,8 @@ class Navigator(Node):
         pose_age = current_time - self.last_pose_update_time
         self.get_logger().info(f"Using pose data (age: {pose_age:.3f}s)")
         
-        # Add node using current pose
-        index = self.add_node(node_name, position[0], position[1], position[2], yaw)
+        # Add node using current pose with internal storage option
+        index = self.add_node(node_name, position[0], position[1], position[2], yaw, publish_immediately)
         self.get_logger().info(f"📍 Added node {node_name} at current pose: ({position[0]:.2f}, {position[1]:.2f}, {position[2]:.2f}) with yaw {yaw:.2f}, index: {index}")
         return True, index
     
@@ -1494,7 +1856,7 @@ class Navigator(Node):
         """
         return f"index:{index};"
     
-    def _publish_command_with_index(self, msg, wait_for_confirmation: bool = True, delay_before_confirm: float = 2.0) -> int:
+    def _publish_command_with_index(self, msg, wait_for_confirmation: bool = True, delay_before_confirm: float = 5.0) -> int:
         """
         Publish a command with an automatically generated index.
         
@@ -1734,76 +2096,7 @@ class Navigator(Node):
         if back:
             threading.Thread(target=self.show_back_camera, daemon=True).start()
     
-    def navigate_to_point(self, x: float, y: float, yaw: float = 0.0, map_name: str = "default") -> bool:
-        """
-        执行定点导航到指定坐标点。
-        
-        Args:
-            x: 目标点X坐标
-            y: 目标点Y坐标
-            yaw: 目标点Yaw角度（弧度）
-            map_name: 使用的地图名称
-            
-        Returns:
-            bool: 导航是否成功启动
-        """
-        try:
-            self.get_logger().info(f"🎯 开始定点导航到坐标: ({x:.2f}, {y:.2f}), 角度: {yaw:.2f}°, 地图: {map_name}")
-            
-            # 获取当前位姿
-            current_pose = self.get_current_pose()
-            if current_pose is None:
-                self.get_logger().error("无法获取当前位姿，导航失败")
-                return False
-            
-            current_x, current_y, current_z = current_pose['position']
-            current_yaw = current_pose['euler'][2]
-            
-            self.get_logger().info(f"📍 当前位置: ({current_x:.2f}, {current_y:.2f}), 角度: {current_yaw:.2f}°")
-            
-            # 计算距离
-            distance = ((x - current_x) ** 2 + (y - current_y) ** 2) ** 0.5
-            self.get_logger().info(f"📏 目标距离: {distance:.2f}米")
-            
-            # 这里需要根据实际的导航系统实现具体的导航逻辑
-            # 例如：调用ROS2的导航action或service
-            
-            # 模拟导航启动（实际实现中需要替换为真实的导航调用）
-            self.get_logger().info(f"🚀 启动导航到目标点...")
-            
-            # 发送导航命令（这里需要根据实际的导航系统调整）
-            # 例如：调用move_base或其他导航服务
-            
-            # 记录导航参数
-            nav_params = {
-                "start_pose": {
-                    "x": current_x,
-                    "y": current_y,
-                    "z": current_z,
-                    "yaw": current_yaw
-                },
-                "goal_pose": {
-                    "x": x,
-                    "y": y,
-                    "z": 0.0,  # 假设Z坐标为0
-                    "yaw": yaw
-                },
-                "map_name": map_name,
-                "distance": distance
-            }
-            
-            self.get_logger().info(f"📋 导航参数: {nav_params}")
-            
-            # 这里应该调用实际的导航服务
-            # 例如：self.navigation_client.send_goal(goal)
-            
-            # 暂时返回成功（实际实现中需要根据导航服务的响应）
-            self.get_logger().info("✅ 定点导航命令已发送")
-            return True
-            
-        except Exception as e:
-            self.get_logger().error(f"定点导航失败: {e}")
-            return False
+
     
     def shutdown(self):
         """供 Ctrl-C 时调用"""
@@ -1814,6 +2107,186 @@ class Navigator(Node):
             t.join()
         # Destroy notice subscriber on shutdown
         self._destroy_notice_subscriber()
+
+    def add_node_at_current_pose_auto_collect(self, node_name: int = None, auto_connect: bool = True) -> tuple[bool, int]:
+        """
+        Automatically collect node at current pose and optionally connect to previous node.
+        This method mimics the behavior of demo_b2.cpp's addNodeAndEdge() function.
+        
+        Args:
+            node_name: Name/ID of the node (if None, auto-increment)
+            auto_connect: Whether to automatically connect to the previous node
+            
+        Returns:
+            tuple[bool, int]: (success, command_index)
+        """
+        # Get current pose
+        current_pose = self.get_realtime_pose()
+        if current_pose is None:
+            self.get_logger().warning("No fresh pose data available, trying to wait for new data...")
+            current_pose = self.wait_for_fresh_pose(timeout=1.0)
+            if current_pose is None:
+                self.get_logger().error("Failed to get fresh pose data within timeout")
+                return False, -1
+        
+        position = current_pose['position']
+        yaw = current_pose['euler'][2]  # Yaw angle
+        
+        # Auto-increment node name if not provided
+        if node_name is None:
+            with self.nodes_lock:
+                node_name = len(self.internal_nodes) + 1
+        
+        # Add node to internal storage
+        with self.nodes_lock:
+            self.internal_nodes[node_name] = {
+                'x': position[0],
+                'y': position[1],
+                'z': position[2],
+                'yaw': yaw,
+                'attribute': 0,
+                'undefined': 0,
+                'state_2': 0,
+                'state_3': 0
+            }
+        
+        self.get_logger().info(f"📍 Auto-collected node {node_name} at ({position[0]:.2f}, {position[1]:.2f}, {position[2]:.2f}) with yaw {yaw:.2f}")
+        
+        # Auto-connect to previous node if requested and there are at least 2 nodes
+        if auto_connect and len(self.internal_nodes) >= 2:
+            prev_node = node_name - 1
+            if prev_node in self.internal_nodes:
+                edge_name = len(self.internal_edges) + 1
+                with self.edges_lock:
+                    self.internal_edges[edge_name] = {
+                        'start_node': prev_node,
+                        'end_node': node_name,
+                        'dog_speed': 1.0,
+                        'edge_state_2': 0,
+                        'dog_stats': 0,
+                        'edge_length': 0.0,
+                        'dog_back_stats': 0,
+                        'edge_state': 0,
+                        'edge_state_1': 0,
+                        'edge_state_3': 0,
+                        'edge_state_4': 0
+                    }
+                
+                self.get_logger().info(f"🔗 Auto-connected edge {edge_name}: {prev_node} → {node_name}")
+        
+        return True, 0
+    
+    def collect_and_save_nodes_edges(self, clear_after_save: bool = True) -> tuple[int, int]:
+        """
+        Collect all nodes and edges from internal storage and publish them.
+        This method mimics the behavior of demo_b2.cpp's saveNodeAndEdge() function.
+        
+        Args:
+            clear_after_save: Whether to clear internal storage after publishing
+            
+        Returns:
+            tuple[int, int]: (node_command_index, edge_command_index)
+        """
+        self.get_logger().info("💾 Collecting and saving nodes and edges...")
+        
+        # Check if we have edges (as per demo_b2.cpp logic)
+        with self.edges_lock:
+            if len(self.internal_edges) == 0:
+                self.get_logger().warning("⚠️ The number of edges in the topology graph is 0.")
+                return 0, 0
+        
+        # Publish nodes first
+        node_index = self.publish_all_nodes()
+        
+        # Wait a bit for nodes to be processed
+        time.sleep(0.5)
+        
+        # Then publish edges
+        edge_index = self.publish_all_edges()
+        
+        self.get_logger().info(f"✅ Collected and saved nodes and edges - Node index: {node_index}, Edge index: {edge_index}")
+        
+        # Clear internal storage if requested
+        if clear_after_save:
+            self.clear_internal_storage()
+            self.get_logger().info("🗑️ Internal storage cleared after save")
+        
+        return node_index, edge_index
+    
+    def auto_collect_loop(self, node_interval: float = 2.0, max_nodes: int = 10) -> None:
+        """
+        Automatically collect nodes and edges in a loop.
+        This mimics the behavior of demo_b2.cpp's keyExecute() function.
+        
+        Args:
+            node_interval: Time interval between node collections (seconds)
+            max_nodes: Maximum number of nodes to collect
+        """
+        self.get_logger().info(f"🔄 Starting auto-collect loop (interval: {node_interval}s, max nodes: {max_nodes})")
+        self.get_logger().info("Press Ctrl+C to stop collection")
+        
+        try:
+            node_count = 0
+            while node_count < max_nodes:
+                # Wait for the specified interval
+                time.sleep(node_interval)
+                
+                # Auto-collect node and edge
+                success, _ = self.add_node_at_current_pose_auto_collect(auto_connect=True)
+                if success:
+                    node_count += 1
+                    self.get_logger().info(f"📊 Collected {node_count}/{max_nodes} nodes")
+                else:
+                    self.get_logger().warning("⚠️ Failed to collect node, retrying...")
+            
+            self.get_logger().info(f"✅ Auto-collection completed: {node_count} nodes collected")
+            
+        except KeyboardInterrupt:
+            self.get_logger().info("⏹️ Auto-collection stopped by user")
+    
+    def get_collection_status(self) -> dict:
+        """
+        Get the current status of node and edge collection.
+        
+        Returns:
+            dict: Collection status information
+        """
+        with self.nodes_lock:
+            with self.edges_lock:
+                return {
+                    'nodes_collected': len(self.internal_nodes),
+                    'edges_collected': len(self.internal_edges),
+                    'node_ids': list(self.internal_nodes.keys()),
+                    'edge_ids': list(self.internal_edges.keys()),
+                    'last_node': max(self.internal_nodes.keys()) if self.internal_nodes else None,
+                    'last_edge': max(self.internal_edges.keys()) if self.internal_edges else None
+                }
+    
+    def clear_collection_and_start_mapping(self) -> None:
+        """
+        Clear all nodes and edges, then start mapping.
+        This mimics the 'w' key behavior in demo_b2.cpp.
+        """
+        self.get_logger().info("🗑️ Clearing all nodes and edges...")
+        self.delete_all_nodes()
+        self.delete_all_edges()
+        self.clear_internal_storage()
+        
+        self.get_logger().info("🗺️ Starting mapping...")
+        self.start_mapping()
+    
+    def prepare_for_collection(self) -> None:
+        """
+        Prepare for node/edge collection by clearing existing data and starting relocation.
+        This mimics the 'z' key behavior in demo_b2.cpp.
+        """
+        self.get_logger().info("🔄 Preparing for node/edge collection...")
+        self.delete_all_nodes()
+        self.delete_all_edges()
+        self.clear_internal_storage()
+        self.start_relocation()
+        self.start_navigation()
+        self.initialize_pose()
 
 def main():
     """Example usage of the Navigator class."""
