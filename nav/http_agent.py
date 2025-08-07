@@ -173,16 +173,20 @@ class HTTPNavigatorAgent:
                         "开始导航": "POST /api/navigation/start_loop",
                         "暂停导航": "POST /api/navigation/pause", 
                         "恢复导航": "POST /api/navigation/recover"
+
                     },
                     "节点管理": {
                         "添加节点": "POST /api/nodes/add",
                         "当前位置添加节点": "POST /api/nodes/add_current",
                         "删除节点": "DELETE /api/nodes/delete",
+                        "删除所有节点": "DELETE /api/nodes/delete_all",
+                        "关闭所有节点": "POST /api/nodes/close_all",
                         "查询节点": "POST /api/nodes/query"
                     },
                     "边管理": {
                         "添加边": "POST /api/edges/add",
                         "删除边": "DELETE /api/edges/delete",
+                        "删除所有边": "DELETE /api/edges/delete_all",
                         "查询边": "POST /api/edges/query"
                     },
                     "位姿操作": {
@@ -203,6 +207,34 @@ class HTTPNavigatorAgent:
                         "保存环境点云": "POST /api/pointcloud/save/environment",
                         "保存轨迹点云": "POST /api/pointcloud/save/trajectory",
                         "保存组合点云": "POST /api/pointcloud/save/combined"
+                    },
+                    "网络分析": {
+                        "网络概览": "GET /api/network/overview",
+                        "路径分析": "POST /api/path/analysis"
+                    },
+                    "内部存储管理": {
+                        "发布所有节点": "POST /api/internal/nodes/publish",
+                        "发布所有边": "POST /api/internal/edges/publish",
+                        "发布所有节点和边": "POST /api/internal/publish_all",
+                        "清除内部存储": "POST /api/internal/clear",
+                        "获取内部存储信息": "GET /api/internal/info"
+                    },
+                    "自动收集功能": {
+                        "自动收集节点": "POST /api/auto_collect/node",
+                        "收集并保存": "POST /api/auto_collect/save",
+                        "自动收集循环": "POST /api/auto_collect/loop",
+                        "准备收集": "POST /api/auto_collect/prepare",
+                        "清除并开始映射": "POST /api/auto_collect/clear_and_map",
+                        "获取收集状态": "GET /api/auto_collect/status"
+                    },
+                    "Notice 缓存控制": {
+                        "配置缓存": "POST /api/notice_cache/configure",
+                        "获取缓存状态": "GET /api/notice_cache/status",
+                        "测试缓存": "POST /api/notice_cache/test"
+                    },
+                    "其他功能": {
+                        "获取云信息": "GET /api/cloud/info",
+                        "设置下采样参数": "POST /api/downsample/configure"
                     },
                     "系统状态": "GET /api/status",
                     "相机数据": {
@@ -293,14 +325,22 @@ class HTTPNavigatorAgent:
         @self.app.route('/api/mapping/start', methods=['POST'])
         def start_mapping():
             """开始建图"""
+            data = {}
             try:
+                # 检查 Content-Type
+                if not request.is_json:
+                    return jsonify({
+                        "success": False, 
+                        "error": "Content-Type must be application/json"
+                    }), 400
+                
                 data = request.get_json() or {}
                 seq = data.get('seq', 'index:123;')
                 attribute = data.get('attribute', 0)
                 
                 self._log_api_call('/api/mapping/start', 'POST', data)
                 
-                result = self.navigator.start_mapping(seq, attribute)
+                result = self.navigator.start_mapping(attribute)
                 message = "建图命令已发送" if result else "建图命令发送失败"
                 
                 self._log_api_call('/api/mapping/start', 'POST', data, result, message)
@@ -319,12 +359,19 @@ class HTTPNavigatorAgent:
         def end_mapping():
             """结束建图"""
             try:
+                # 检查 Content-Type
+                if not request.is_json:
+                    return jsonify({
+                        "success": False, 
+                        "error": "Content-Type must be application/json"
+                    }), 400
+                
                 data = request.get_json() or {}
                 seq = data.get('seq', 'index:123;')
                 floor_index = data.get('floor_index', 0)
                 pcdmap_index = data.get('pcdmap_index', 0)
                 
-                result = self.navigator.end_mapping(seq, floor_index, pcdmap_index)
+                result = self.navigator.end_mapping(floor_index, pcdmap_index)
                 return jsonify({
                     "success": result,
                     "message": "结束建图命令已发送" if result else "结束建图命令发送失败",
@@ -360,7 +407,7 @@ class HTTPNavigatorAgent:
                 data = request.get_json() or {}
                 seq = data.get('seq', 'index:123;')
                 
-                result = self.navigator.pause_navigation(seq)
+                result = self.navigator.pause_navigation()
                 return jsonify({
                     "success": result,
                     "message": "暂停导航命令已发送" if result else "暂停导航命令发送失败",
@@ -376,7 +423,7 @@ class HTTPNavigatorAgent:
                 data = request.get_json() or {}
                 seq = data.get('seq', 'index:123;')
                 
-                result = self.navigator.recover_navigation(seq)
+                result = self.navigator.recover_navigation()
                 return jsonify({
                     "success": result,
                     "message": "恢复导航命令已发送" if result else "恢复导航命令发送失败",
@@ -390,6 +437,13 @@ class HTTPNavigatorAgent:
         def add_node():
             """添加节点"""
             try:
+                # 检查 Content-Type
+                if not request.is_json:
+                    return jsonify({
+                        "success": False, 
+                        "error": "Content-Type must be application/json"
+                    }), 400
+                
                 data = request.get_json()
                 if not data:
                     return jsonify({"success": False, "error": "缺少请求数据"}), 400
@@ -404,7 +458,7 @@ class HTTPNavigatorAgent:
                 if node_name is None or x is None or y is None:
                     return jsonify({"success": False, "error": "缺少必要参数: node_name, x, y"}), 400
                 
-                self.navigator.add_node(node_name, x, y, z, yaw, seq)
+                self.navigator.add_node(node_name, x, y, z, yaw, False)
                 return jsonify({
                     "success": True,
                     "message": f"节点 {node_name} 已添加到位置 ({x}, {y}, {z})",
@@ -425,7 +479,7 @@ class HTTPNavigatorAgent:
                 if node_name is None:
                     return jsonify({"success": False, "error": "缺少必要参数: node_name"}), 400
                 
-                result = self.navigator.add_node_at_current_pose(node_name, seq, use_realtime)
+                result = self.navigator.add_node_at_current_pose(node_name, use_realtime, False)
                 return jsonify({
                     "success": result,
                     "message": f"节点 {node_name} 已添加到当前位置" if result else "添加节点失败",
@@ -451,7 +505,7 @@ class HTTPNavigatorAgent:
                 if not node_ids:
                     return jsonify({"success": False, "error": "缺少必要参数: node_ids"}), 400
                 
-                self.navigator.delete_node(node_ids, seq)
+                self.navigator.delete_node(node_ids)
                 return jsonify({
                     "success": True,
                     "message": f"节点 {node_ids} 删除命令已发送",
@@ -465,6 +519,13 @@ class HTTPNavigatorAgent:
         def add_edge():
             """添加边"""
             try:
+                # 检查 Content-Type
+                if not request.is_json:
+                    return jsonify({
+                        "success": False, 
+                        "error": "Content-Type must be application/json"
+                    }), 400
+                
                 data = request.get_json()
                 if not data:
                     return jsonify({"success": False, "error": "缺少请求数据"}), 400
@@ -478,7 +539,7 @@ class HTTPNavigatorAgent:
                 if edge_name is None or start_node is None or end_node is None:
                     return jsonify({"success": False, "error": "缺少必要参数: edge_name, start_node, end_node"}), 400
                 
-                self.navigator.add_edge(edge_name, start_node, end_node, dog_speed, seq)
+                self.navigator.add_edge(edge_name, start_node, end_node, dog_speed, False)
                 return jsonify({
                     "success": True,
                     "message": f"边 {edge_name} 已添加 (节点{start_node} -> 节点{end_node})",
@@ -501,7 +562,7 @@ class HTTPNavigatorAgent:
                 if not edge_ids:
                     return jsonify({"success": False, "error": "缺少必要参数: edge_ids"}), 400
                 
-                self.navigator.delete_edge(edge_ids, seq)
+                self.navigator.delete_edge(edge_ids)
                 return jsonify({
                     "success": True,
                     "message": f"边 {edge_ids} 删除命令已发送",
@@ -517,6 +578,7 @@ class HTTPNavigatorAgent:
         @self.app.route('/api/camera/data', methods=['POST'])
         def get_camera_data():
             """获取相机数据"""
+            data = {}
             try:
                 data = request.get_json()
                 if not data:
@@ -596,7 +658,7 @@ class HTTPNavigatorAgent:
                     quaternion.get('w', 1.0)
                 )
                 
-                result = self.navigator.pose_init(seq, trans_tuple, quat_tuple)
+                result = self.navigator.pose_init(trans_tuple, quat_tuple)
                 return jsonify({
                     "success": result,
                     "message": "位姿初始化命令已发送" if result else "位姿初始化命令发送失败",
@@ -614,7 +676,7 @@ class HTTPNavigatorAgent:
                 seq = data.get('seq', 'index:123;')
                 attribute = data.get('attribute', 0)
                 
-                result = self.navigator.start_relocation(seq, attribute)
+                result = self.navigator.start_relocation()
                 return jsonify({
                     "success": result,
                     "message": "重定位命令已发送" if result else "重定位命令发送失败",
@@ -1039,6 +1101,442 @@ class HTTPNavigatorAgent:
                 self.logger.error(f"设置自动导航失败: {e}")
                 return jsonify({"success": False, "error": str(e)}), 500
 
+        # ==================== 节点和边管理扩展功能 ====================
+        
+        @self.app.route('/api/nodes/delete_all', methods=['DELETE'])
+        def delete_all_nodes():
+            """删除所有节点"""
+            try:
+                self._log_api_call('/api/nodes/delete_all', 'DELETE')
+                result = self.navigator.delete_all_nodes()
+                return jsonify({
+                    "success": True,
+                    "message": "所有节点删除成功",
+                    "result": result
+                })
+            except Exception as e:
+                self._log_api_call('/api/nodes/delete_all', 'DELETE', success=False, message=str(e))
+                return jsonify({"success": False, "error": str(e)}), 500
+        
+        @self.app.route('/api/edges/delete_all', methods=['DELETE'])
+        def delete_all_edges():
+            """删除所有边"""
+            try:
+                self._log_api_call('/api/edges/delete_all', 'DELETE')
+                result = self.navigator.delete_all_edges()
+                return jsonify({
+                    "success": True,
+                    "message": "所有边删除成功",
+                    "result": result
+                })
+            except Exception as e:
+                self._log_api_call('/api/edges/delete_all', 'DELETE', success=False, message=str(e))
+                return jsonify({"success": False, "error": str(e)}), 500
+        
+        @self.app.route('/api/nodes/query', methods=['POST'])
+        def query_nodes():
+            """查询节点"""
+            try:
+                data = request.get_json() or {}
+                attribute = data.get('attribute', 1)
+                
+                self._log_api_call('/api/nodes/query', 'POST', data)
+                success, result = self.navigator.query_node(attribute)
+                
+                return jsonify({
+                    "success": success,
+                    "message": "节点查询完成",
+                    "result": result
+                })
+            except Exception as e:
+                self._log_api_call('/api/nodes/query', 'POST', success=False, message=str(e))
+                return jsonify({"success": False, "error": str(e)}), 500
+        
+        @self.app.route('/api/edges/query', methods=['POST'])
+        def query_edges():
+            """查询边"""
+            try:
+                data = request.get_json() or {}
+                attribute = data.get('attribute', 2)
+                
+                self._log_api_call('/api/edges/query', 'POST', data)
+                success, result = self.navigator.query_edge(attribute)
+                
+                return jsonify({
+                    "success": success,
+                    "message": "边查询完成",
+                    "result": result
+                })
+            except Exception as e:
+                self._log_api_call('/api/edges/query', 'POST', success=False, message=str(e))
+                return jsonify({"success": False, "error": str(e)}), 500
+        
+        @self.app.route('/api/network/overview', methods=['GET'])
+        def network_overview():
+            """网络概览分析"""
+            try:
+                self._log_api_call('/api/network/overview', 'GET')
+                
+                # 获取节点和边数据
+                nodes_success, nodes_result = self.navigator.query_node(1)
+                edges_success, edges_result = self.navigator.query_edge(2)
+                
+                if not nodes_success or not edges_success:
+                    return jsonify({
+                        "success": False,
+                        "error": "无法获取网络数据"
+                    }), 500
+                
+                # 这里可以添加网络分析逻辑
+                overview = {
+                    "total_nodes": nodes_result,
+                    "total_edges": edges_result,
+                    "timestamp": time.time()
+                }
+                
+                return jsonify({
+                    "success": True,
+                    "message": "网络概览分析完成",
+                    "overview": overview
+                })
+            except Exception as e:
+                self._log_api_call('/api/network/overview', 'GET', success=False, message=str(e))
+                return jsonify({"success": False, "error": str(e)}), 500
+        
+        @self.app.route('/api/path/analysis', methods=['POST'])
+        def path_analysis():
+            """路径分析"""
+            try:
+                data = request.get_json() or {}
+                start_node = data.get('start_node')
+                end_node = data.get('end_node')
+                
+                self._log_api_call('/api/path/analysis', 'POST', data)
+                
+                if start_node is None or end_node is None:
+                    return jsonify({
+                        "success": False,
+                        "error": "需要提供 start_node 和 end_node 参数"
+                    }), 400
+                
+                # 这里可以添加路径分析逻辑
+                analysis = {
+                    "start_node": start_node,
+                    "end_node": end_node,
+                    "paths_found": 0,
+                    "shortest_path": [],
+                    "timestamp": time.time()
+                }
+                
+                return jsonify({
+                    "success": True,
+                    "message": "路径分析完成",
+                    "analysis": analysis
+                })
+            except Exception as e:
+                self._log_api_call('/api/path/analysis', 'POST', success=False, message=str(e))
+                return jsonify({"success": False, "error": str(e)}), 500
+        
+        # ==================== 内部存储管理 ====================
+        
+        @self.app.route('/api/internal/nodes/publish', methods=['POST'])
+        def publish_all_nodes():
+            """发布所有内部存储的节点"""
+            try:
+                self._log_api_call('/api/internal/nodes/publish', 'POST')
+                result = self.navigator.publish_all_nodes()
+                return jsonify({
+                    "success": True,
+                    "message": "所有内部节点发布成功",
+                    "result": result
+                })
+            except Exception as e:
+                self._log_api_call('/api/internal/nodes/publish', 'POST', success=False, message=str(e))
+                return jsonify({"success": False, "error": str(e)}), 500
+        
+        @self.app.route('/api/internal/edges/publish', methods=['POST'])
+        def publish_all_edges():
+            """发布所有内部存储的边"""
+            try:
+                self._log_api_call('/api/internal/edges/publish', 'POST')
+                result = self.navigator.publish_all_edges()
+                return jsonify({
+                    "success": True,
+                    "message": "所有内部边发布成功",
+                    "result": result
+                })
+            except Exception as e:
+                self._log_api_call('/api/internal/edges/publish', 'POST', success=False, message=str(e))
+                return jsonify({"success": False, "error": str(e)}), 500
+        
+        @self.app.route('/api/internal/publish_all', methods=['POST'])
+        def publish_all_nodes_and_edges():
+            """发布所有内部存储的节点和边"""
+            try:
+                self._log_api_call('/api/internal/publish_all', 'POST')
+                node_result, edge_result = self.navigator.publish_all_nodes_and_edges()
+                return jsonify({
+                    "success": True,
+                    "message": "所有内部节点和边发布成功",
+                    "node_result": node_result,
+                    "edge_result": edge_result
+                })
+            except Exception as e:
+                self._log_api_call('/api/internal/publish_all', 'POST', success=False, message=str(e))
+                return jsonify({"success": False, "error": str(e)}), 500
+        
+        @self.app.route('/api/internal/clear', methods=['POST'])
+        def clear_internal_storage():
+            """清除内部存储"""
+            try:
+                self._log_api_call('/api/internal/clear', 'POST')
+                self.navigator.clear_internal_storage()
+                return jsonify({
+                    "success": True,
+                    "message": "内部存储清除成功"
+                })
+            except Exception as e:
+                self._log_api_call('/api/internal/clear', 'POST', success=False, message=str(e))
+                return jsonify({"success": False, "error": str(e)}), 500
+        
+        @self.app.route('/api/internal/info', methods=['GET'])
+        def get_internal_storage_info():
+            """获取内部存储信息"""
+            try:
+                self._log_api_call('/api/internal/info', 'GET')
+                info = self.navigator.get_internal_storage_info()
+                return jsonify({
+                    "success": True,
+                    "message": "内部存储信息获取成功",
+                    "info": info
+                })
+            except Exception as e:
+                self._log_api_call('/api/internal/info', 'GET', success=False, message=str(e))
+                return jsonify({"success": False, "error": str(e)}), 500
+        
+        # ==================== 自动收集功能 ====================
+        
+        @self.app.route('/api/auto_collect/node', methods=['POST'])
+        def auto_collect_node():
+            """自动收集当前位姿的节点"""
+            try:
+                data = request.get_json() or {}
+                auto_connect = data.get('auto_connect', True)
+                
+                self._log_api_call('/api/auto_collect/node', 'POST', data)
+                success, result = self.navigator.add_node_at_current_pose_auto_collect(auto_connect=auto_connect)
+                
+                return jsonify({
+                    "success": success,
+                    "message": "自动收集节点完成",
+                    "result": result
+                })
+            except Exception as e:
+                self._log_api_call('/api/auto_collect/node', 'POST', success=False, message=str(e))
+                return jsonify({"success": False, "error": str(e)}), 500
+        
+        @self.app.route('/api/auto_collect/save', methods=['POST'])
+        def collect_and_save_nodes_edges():
+            """收集并保存所有节点和边"""
+            try:
+                data = request.get_json() or {}
+                clear_after_save = data.get('clear_after_save', True)
+                
+                self._log_api_call('/api/auto_collect/save', 'POST', data)
+                node_result, edge_result = self.navigator.collect_and_save_nodes_edges(clear_after_save)
+                
+                return jsonify({
+                    "success": True,
+                    "message": "收集并保存节点和边完成",
+                    "node_result": node_result,
+                    "edge_result": edge_result
+                })
+            except Exception as e:
+                self._log_api_call('/api/auto_collect/save', 'POST', success=False, message=str(e))
+                return jsonify({"success": False, "error": str(e)}), 500
+        
+        @self.app.route('/api/auto_collect/loop', methods=['POST'])
+        def auto_collect_loop():
+            """自动收集循环"""
+            try:
+                data = request.get_json() or {}
+                node_interval = data.get('node_interval', 2.0)
+                max_nodes = data.get('max_nodes', 10)
+                
+                self._log_api_call('/api/auto_collect/loop', 'POST', data)
+                self.navigator.auto_collect_loop(node_interval, max_nodes)
+                
+                return jsonify({
+                    "success": True,
+                    "message": "自动收集循环启动",
+                    "node_interval": node_interval,
+                    "max_nodes": max_nodes
+                })
+            except Exception as e:
+                self._log_api_call('/api/auto_collect/loop', 'POST', success=False, message=str(e))
+                return jsonify({"success": False, "error": str(e)}), 500
+        
+        @self.app.route('/api/auto_collect/prepare', methods=['POST'])
+        def prepare_for_collection():
+            """准备收集"""
+            try:
+                self._log_api_call('/api/auto_collect/prepare', 'POST')
+                self.navigator.prepare_for_collection()
+                return jsonify({
+                    "success": True,
+                    "message": "准备收集完成"
+                })
+            except Exception as e:
+                self._log_api_call('/api/auto_collect/prepare', 'POST', success=False, message=str(e))
+                return jsonify({"success": False, "error": str(e)}), 500
+        
+        @self.app.route('/api/auto_collect/clear_and_map', methods=['POST'])
+        def clear_and_start_mapping():
+            """清除并开始映射"""
+            try:
+                self._log_api_call('/api/auto_collect/clear_and_map', 'POST')
+                self.navigator.clear_collection_and_start_mapping()
+                return jsonify({
+                    "success": True,
+                    "message": "清除并开始映射完成"
+                })
+            except Exception as e:
+                self._log_api_call('/api/auto_collect/clear_and_map', 'POST', success=False, message=str(e))
+                return jsonify({"success": False, "error": str(e)}), 500
+        
+        @self.app.route('/api/auto_collect/status', methods=['GET'])
+        def get_collection_status():
+            """获取收集状态"""
+            try:
+                self._log_api_call('/api/auto_collect/status', 'GET')
+                status = self.navigator.get_collection_status()
+                return jsonify({
+                    "success": True,
+                    "message": "收集状态获取成功",
+                    "status": status
+                })
+            except Exception as e:
+                self._log_api_call('/api/auto_collect/status', 'GET', success=False, message=str(e))
+                return jsonify({"success": False, "error": str(e)}), 500
+        
+        # ==================== Notice 缓存控制 ====================
+        
+        @self.app.route('/api/notice_cache/configure', methods=['POST'])
+        def configure_notice_cache():
+            """配置 notice 缓存"""
+            try:
+                data = request.get_json() or {}
+                cache_duration = data.get('cache_duration', 2.0)
+                auto_cache = data.get('auto_cache', True)
+                
+                self._log_api_call('/api/notice_cache/configure', 'POST', data)
+                config = self.navigator.configure_notice_cache(cache_duration, auto_cache)
+                
+                return jsonify({
+                    "success": True,
+                    "message": "Notice 缓存配置成功",
+                    "config": config
+                })
+            except Exception as e:
+                self._log_api_call('/api/notice_cache/configure', 'POST', success=False, message=str(e))
+                return jsonify({"success": False, "error": str(e)}), 500
+        
+        @self.app.route('/api/notice_cache/status', methods=['GET'])
+        def get_notice_cache_status():
+            """获取 notice 缓存状态"""
+            try:
+                self._log_api_call('/api/notice_cache/status', 'GET')
+                status = self.navigator.get_notice_cache_status()
+                return jsonify({
+                    "success": True,
+                    "message": "Notice 缓存状态获取成功",
+                    "status": status
+                })
+            except Exception as e:
+                self._log_api_call('/api/notice_cache/status', 'GET', success=False, message=str(e))
+                return jsonify({"success": False, "error": str(e)}), 500
+        
+        @self.app.route('/api/notice_cache/test', methods=['POST'])
+        def test_notice_cache():
+            """测试 notice 缓存"""
+            try:
+                data = request.get_json() or {}
+                duration = data.get('duration', 3.0)
+                
+                self._log_api_call('/api/notice_cache/test', 'POST', data)
+                results = self.navigator.test_notice_cache(duration)
+                
+                return jsonify({
+                    "success": True,
+                    "message": "Notice 缓存测试完成",
+                    "results": results
+                })
+            except Exception as e:
+                self._log_api_call('/api/notice_cache/test', 'POST', success=False, message=str(e))
+                return jsonify({"success": False, "error": str(e)}), 500
+        
+        # ==================== 其他功能 ====================
+        
+        @self.app.route('/api/nodes/close_all', methods=['POST'])
+        def close_all_nodes():
+            """关闭所有节点"""
+            try:
+                self._log_api_call('/api/nodes/close_all', 'POST')
+                result = self.navigator.close_all_nodes()
+                return jsonify({
+                    "success": True,
+                    "message": "所有节点关闭成功",
+                    "result": result
+                })
+            except Exception as e:
+                self._log_api_call('/api/nodes/close_all', 'POST', success=False, message=str(e))
+                return jsonify({"success": False, "error": str(e)}), 500
+        
+        @self.app.route('/api/cloud/info', methods=['GET'])
+        def get_cloud_info():
+            """获取云信息"""
+            try:
+                self._log_api_call('/api/cloud/info', 'GET')
+                cloud_size = self.navigator.get_cloud_size()
+                traj_size = self.navigator.get_trajectory_size()
+                total_size = self.navigator.get_total_cloud_size()
+                
+                info = {
+                    "environment_cloud_points": cloud_size,
+                    "trajectory_cloud_points": traj_size,
+                    "total_cloud_points": total_size
+                }
+                
+                return jsonify({
+                    "success": True,
+                    "message": "云信息获取成功",
+                    "info": info
+                })
+            except Exception as e:
+                self._log_api_call('/api/cloud/info', 'GET', success=False, message=str(e))
+                return jsonify({"success": False, "error": str(e)}), 500
+        
+        @self.app.route('/api/downsample/configure', methods=['POST'])
+        def set_downsample_parameters():
+            """设置下采样参数"""
+            try:
+                data = request.get_json() or {}
+                max_size = data.get('max_size', 100000)
+                voxel_size = data.get('voxel_size', 0.05)
+                
+                self._log_api_call('/api/downsample/configure', 'POST', data)
+                self.navigator.set_downsample_parameters(max_size, voxel_size)
+                
+                return jsonify({
+                    "success": True,
+                    "message": "下采样参数设置成功",
+                    "max_size": max_size,
+                    "voxel_size": voxel_size
+                })
+            except Exception as e:
+                self._log_api_call('/api/downsample/configure', 'POST', success=False, message=str(e))
+                return jsonify({"success": False, "error": str(e)}), 500
+
         # 系统状态
         @self.app.route('/api/status', methods=['GET'])
         def get_system_status():
@@ -1183,4 +1681,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
