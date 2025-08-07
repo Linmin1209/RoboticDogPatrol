@@ -175,6 +175,10 @@ class Navigator(Node):
         self.notice_subscriber = None
         self.notice_topic = notice_topic
         self.notice_qos = qos
+        
+        # Notice cache configuration
+        self.notice_cache_duration = 2.0  # Default cache duration in seconds
+        self.notice_auto_cache = True      # Whether to auto-cache before publishing commands
        
         
         # Robot state message cache
@@ -1832,6 +1836,127 @@ class Navigator(Node):
         if self.notice_subscriber is None:
             self._create_notice_subscriber()
     
+    def _cache_notice_data(self, duration: float = 2.0) -> dict:
+        """
+        Cache notice data for a specified duration.
+        
+        Args:
+            duration: Duration to cache notice data in seconds
+            
+        Returns:
+            dict: Cache status information
+        """
+        self.get_logger().info(f"📢 Starting notice data cache for {duration}s...")
+        
+        # Ensure notice subscriber exists
+        self._ensure_notice_subscriber()
+        
+        # Clear previous command confirmations
+        initial_count = len(self.command_confirmations)
+        self.clear_command_confirmations()
+        
+        # Cache notice data for specified duration
+        start_time = time.time()
+        time.sleep(duration)
+        end_time = time.time()
+        
+        # Get cache results
+        cached_count = len(self.command_confirmations)
+        cache_duration = end_time - start_time
+        
+        cache_status = {
+            'initial_count': initial_count,
+            'cached_count': cached_count,
+            'cache_duration': cache_duration,
+            'requested_duration': duration,
+            'cached_messages': list(self.command_confirmations.keys())
+        }
+        
+        self.get_logger().info(f"📋 Notice cache completed:")
+        self.get_logger().info(f"   📊 Initial notices: {initial_count}")
+        self.get_logger().info(f"   📊 Cached notices: {cached_count}")
+        self.get_logger().info(f"   ⏱️ Cache duration: {cache_duration:.2f}s")
+        
+        return cache_status
+    
+    def get_notice_cache_status(self) -> dict:
+        """
+        Get the current status of notice cache.
+        
+        Returns:
+            dict: Cache status information
+        """
+        with self.notice_lock:
+            return {
+                'subscriber_active': self.notice_subscriber is not None,
+                'cached_messages': len(self.command_confirmations),
+                'last_notice': self.last_notice,
+                'command_confirmations': dict(self.command_confirmations),
+                'notice_topic': self.notice_topic
+            }
+    
+    def configure_notice_cache(self, cache_duration: float = 2.0, auto_cache: bool = True) -> dict:
+        """
+        Configure notice cache parameters.
+        
+        Args:
+            cache_duration: Default duration to cache notice data
+            auto_cache: Whether to automatically cache before publishing commands
+            
+        Returns:
+            dict: Configuration status
+        """
+        self.notice_cache_duration = cache_duration
+        self.notice_auto_cache = auto_cache
+        
+        config = {
+            'cache_duration': self.notice_cache_duration,
+            'auto_cache': self.notice_auto_cache,
+            'message': 'Notice cache configuration updated'
+        }
+        
+        self.get_logger().info(f"⚙️ Notice cache configuration updated:")
+        self.get_logger().info(f"   ⏱️ Cache duration: {cache_duration}s")
+        self.get_logger().info(f"   🔄 Auto cache: {auto_cache}")
+        
+        return config
+    
+    def test_notice_cache(self, duration: float = 3.0) -> dict:
+        """
+        Test the notice cache functionality.
+        
+        Args:
+            duration: Duration to test cache in seconds
+            
+        Returns:
+            dict: Test results
+        """
+        self.get_logger().info(f"🧪 Testing notice cache for {duration}s...")
+        
+        # Get initial status
+        initial_status = self.get_notice_cache_status()
+        
+        # Test cache functionality
+        cache_result = self._cache_notice_data(duration=duration)
+        
+        # Get final status
+        final_status = self.get_notice_cache_status()
+        
+        test_results = {
+            'test_duration': duration,
+            'initial_status': initial_status,
+            'cache_result': cache_result,
+            'final_status': final_status,
+            'cache_working': final_status['cached_messages'] > 0 or cache_result['cached_count'] > 0
+        }
+        
+        self.get_logger().info(f"🧪 Notice cache test completed:")
+        self.get_logger().info(f"   ✅ Cache working: {test_results['cache_working']}")
+        self.get_logger().info(f"   📊 Cached messages: {cache_result['cached_count']}")
+        self.get_logger().info(f"   ⏱️ Test duration: {duration}s")
+        
+        return test_results
+    
     def _get_next_index(self) -> int:
         """
         Get the next command index in a thread-safe manner.
@@ -1856,14 +1981,16 @@ class Navigator(Node):
         """
         return f"index:{index};"
     
-    def _publish_command_with_index(self, msg, wait_for_confirmation: bool = True, delay_before_confirm: float = 5.0) -> int:
+    def _publish_command_with_index(self, msg, wait_for_confirmation: bool = True, delay_before_confirm: float = 5.0, cache_duration: float = 2.0) -> int:
         """
         Publish a command with an automatically generated index.
+        First creates a notice subscriber to cache notice data, then publishes the command.
         
         Args:
             msg: The message to publish
             wait_for_confirmation: Whether to wait for confirmation
             delay_before_confirm: Delay in seconds before starting confirmation check
+            cache_duration: Duration to cache notice data before publishing command
             
         Returns:
             int: The index used for this command
@@ -1875,6 +2002,18 @@ class Navigator(Node):
         # Set the sequence string
         if hasattr(msg, 'seq'):
             msg.seq.data = seq_string
+        
+        # Create notice subscriber and cache data if confirmation is needed
+        if wait_for_confirmation:
+            self.get_logger().info(f"📢 Creating notice subscriber and caching data for {cache_duration}s before publishing command {index}")
+            
+            # Cache notice data using the new cache method
+            cache_status = self._cache_notice_data(duration=cache_duration)
+            
+            # Log cache results
+            self.get_logger().info(f"📋 Cache results for command {index}:")
+            self.get_logger().info(f"   📊 Cached notices: {cache_status['cached_count']}")
+            self.get_logger().info(f"   ⏱️ Cache duration: {cache_status['cache_duration']:.2f}s")
         
         # Publish the message
         if hasattr(msg, 'command'):
