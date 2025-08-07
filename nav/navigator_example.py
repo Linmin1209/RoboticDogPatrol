@@ -114,13 +114,24 @@ class InteractiveNavigator:
         use_realtime = use_realtime != 'n'  # Default to True unless explicitly 'n'
         
         print("📍 Adding node at current pose...")
+        print("Options:")
+        print("  1. Store internally (default)")
+        print("  2. Publish immediately")
+        
+        choice = input("Enter choice (1-2, default: 1): ").strip()
+        publish_immediately = (choice == "2")
+        
         if use_realtime:
             print("🔄 Using realtime pose data with timeout check...")
         else:
             print("📊 Using any available pose data...")
             
-        if self.navigator.add_node_at_current_pose(node_name, use_realtime=use_realtime):
-            print(f"✅ Node {node_name} added successfully")
+        success, index = self.navigator.add_node_at_current_pose(node_name, use_realtime=use_realtime, publish_immediately=publish_immediately)
+        if success:
+            if publish_immediately:
+                print(f"✅ Node {node_name} published immediately with index: {index}")
+            else:
+                print(f"📍 Node {node_name} stored internally")
             self.node_counter += 1
         else:
             print("❌ Failed to add node - no pose data available")
@@ -132,9 +143,21 @@ class InteractiveNavigator:
         edge_name = self.get_int_input("Enter edge name/ID", self.edge_counter)
         speed = self.get_float_input("Enter dog speed", 1.0)
         
+        print("🔗 Adding edge...")
+        print("Options:")
+        print("  1. Store internally (default)")
+        print("  2. Publish immediately")
+        
+        choice = input("Enter choice (1-2, default: 1): ").strip()
+        publish_immediately = (choice == "2")
+        
         print(f"🔗 Adding edge {edge_name} from node {start_node} to {end_node}...")
-        self.navigator.add_edge(edge_name, start_node, end_node, speed)
-        print("✅ Edge added successfully")
+        index = self.navigator.add_edge(edge_name, start_node, end_node, speed, publish_immediately=publish_immediately)
+        
+        if publish_immediately:
+            print(f"✅ Edge {edge_name} published immediately with index: {index}")
+        else:
+            print(f"🔗 Edge {edge_name} stored internally")
         self.edge_counter += 1
     
     def add_edge_with_restriction(self):
@@ -339,12 +362,13 @@ class InteractiveNavigator:
         x = self.get_float_input("Enter target X coordinate", 5.0)
         y = self.get_float_input("Enter target Y coordinate", 3.0)
         yaw = self.get_float_input("Enter target Yaw angle (radians)", 0.0)
+        goal_node_id = self.get_int_input("Enter target node ID", None)
         map_name = input("Enter map name (default: default): ").strip() or "default"
         
         print(f"🎯 Navigating to point: ({x:.2f}, {y:.2f}), angle: {yaw:.2f}°, map: {map_name}")
         
         # Execute navigation
-        if self.navigator.navigate_to_point(x, y, yaw, map_name):
+        if self.navigator.navigate_to_point(x, y, yaw, goal_node_id, map_name):
             print("✅ Fixed point navigation started successfully")
             
             # Show current pose for reference
@@ -503,6 +527,352 @@ class InteractiveNavigator:
         else:
             print("❌ Edge query failed")
     
+    def query_network_overview(self):
+        """Query complete network overview (nodes and edges)."""
+        print("🌐 Network Overview")
+        print("=" * 25)
+        try:
+            # Query both nodes and edges
+            nodes = self.navigator.query_node()
+            edges = self.navigator.query_edge()
+            
+            print("📊 Network Summary:")
+            print(f"  📍 Total nodes: {len(nodes) if nodes else 0}")
+            print(f"  🔗 Total edges: {len(edges) if edges else 0}")
+            
+            if nodes and edges:
+                # Calculate network connectivity
+                connected_nodes = set()
+                for edge_data in edges.values():
+                    connected_nodes.add(edge_data.get('start_node'))
+                    connected_nodes.add(edge_data.get('end_node'))
+                
+                isolated_nodes = set(nodes.keys()) - connected_nodes
+                
+                print(f"  🔗 Connected nodes: {len(connected_nodes)}")
+                print(f"  📍 Isolated nodes: {len(isolated_nodes)}")
+                
+                if isolated_nodes:
+                    print(f"  📍 Isolated node IDs: {sorted(isolated_nodes)}")
+                
+                # Show node details
+                print("\n📍 Node Details:")
+                for node_id, node_data in nodes.items():
+                    pos = node_data.get('position', {})
+                    print(f"  Node {node_id}: ({pos.get('x', 0):.2f}, {pos.get('y', 0):.2f}, {pos.get('z', 0):.2f})")
+                
+                # Show edge details
+                print("\n🔗 Edge Details:")
+                for edge_id, edge_data in edges.items():
+                    print(f"  Edge {edge_id}: {edge_data.get('start_node')} → {edge_data.get('end_node')} (speed: {edge_data.get('speed', 0):.2f} m/s)")
+                
+                # Find disconnected components
+                print("\n🔍 Connectivity Analysis:")
+                if len(connected_nodes) > 0:
+                    print(f"  ✅ Network is connected with {len(connected_nodes)} nodes")
+                else:
+                    print("  ⚠️  Network has no connections")
+                
+                if len(isolated_nodes) > 0:
+                    print(f"  ⚠️  {len(isolated_nodes)} isolated nodes found")
+                
+            elif nodes and not edges:
+                print("  ⚠️  Nodes exist but no edges defined")
+            elif edges and not nodes:
+                print("  ⚠️  Edges exist but no nodes defined")
+            else:
+                print("  📭 No nodes or edges found")
+                
+        except Exception as e:
+            print(f"❌ Error querying network overview: {e}")
+    
+    def query_path_analysis(self):
+        """Analyze possible paths between nodes."""
+        print("🛤️ Path Analysis")
+        print("=" * 20)
+        
+        try:
+            nodes = self.navigator.query_node()
+            edges = self.navigator.query_edge()
+            
+            if not nodes or not edges:
+                print("❌ Need both nodes and edges for path analysis")
+                return
+            
+            print("Options:")
+            print("  1. Find all possible paths")
+            print("  2. Find shortest path between two nodes")
+            print("  3. Find all paths from a specific node")
+            
+            choice = input("Enter choice (1-3, default: 1): ").strip()
+            
+            if choice == "1" or choice == "":
+                self.find_all_paths(nodes, edges)
+            elif choice == "2":
+                self.find_shortest_path(nodes, edges)
+            elif choice == "3":
+                self.find_paths_from_node(nodes, edges)
+            else:
+                print("❌ Invalid choice")
+                
+        except Exception as e:
+            print(f"❌ Error in path analysis: {e}")
+    
+    def find_all_paths(self, nodes, edges):
+        """Find all possible paths in the network."""
+        print("🔍 Finding all possible paths...")
+        
+        # Build adjacency list
+        adjacency = {}
+        for edge_id, edge_data in edges.items():
+            start = edge_data.get('start_node')
+            end = edge_data.get('end_node')
+            if start not in adjacency:
+                adjacency[start] = []
+            if end not in adjacency:
+                adjacency[end] = []
+            adjacency[start].append(end)
+            adjacency[end].append(start)  # Assuming bidirectional
+        
+        # Find all paths (simplified - just direct connections)
+        paths = []
+        for start_node in nodes.keys():
+            if start_node in adjacency:
+                for end_node in adjacency[start_node]:
+                    if end_node in nodes:
+                        paths.append((start_node, end_node))
+        
+        if paths:
+            print(f"✅ Found {len(paths)} direct connections:")
+            for start, end in paths:
+                print(f"  {start} → {end}")
+        else:
+            print("📭 No direct connections found")
+    
+    def find_shortest_path(self, nodes, edges):
+        """Find shortest path between two nodes."""
+        start_node = self.get_int_input("Enter start node ID")
+        end_node = self.get_int_input("Enter end node ID")
+        
+        print(f"🔍 Finding shortest path from {start_node} to {end_node}...")
+        
+        # Simple BFS for shortest path
+        if start_node not in nodes or end_node not in nodes:
+            print("❌ One or both nodes not found")
+            return
+        
+        # Build adjacency list
+        adjacency = {}
+        for edge_id, edge_data in edges.items():
+            start = edge_data.get('start_node')
+            end = edge_data.get('end_node')
+            if start not in adjacency:
+                adjacency[start] = []
+            if end not in adjacency:
+                adjacency[end] = []
+            adjacency[start].append(end)
+            adjacency[end].append(start)
+        
+        # BFS for shortest path
+        queue = [(start_node, [start_node])]
+        visited = set()
+        
+        while queue:
+            current, path = queue.pop(0)
+            if current == end_node:
+                print(f"✅ Shortest path found: {' → '.join(map(str, path))}")
+                return
+            
+            if current in visited:
+                continue
+            visited.add(current)
+            
+            if current in adjacency:
+                for neighbor in adjacency[current]:
+                    if neighbor not in visited:
+                        queue.append((neighbor, path + [neighbor]))
+        
+        print("❌ No path found between the specified nodes")
+    
+    def find_paths_from_node(self, nodes, edges):
+        """Find all paths from a specific node."""
+        start_node = self.get_int_input("Enter start node ID")
+        
+        if start_node not in nodes:
+            print(f"❌ Node {start_node} not found")
+            return
+        
+        print(f"🔍 Finding all paths from node {start_node}...")
+        
+        # Build adjacency list
+        adjacency = {}
+        for edge_id, edge_data in edges.items():
+            start = edge_data.get('start_node')
+            end = edge_data.get('end_node')
+            if start not in adjacency:
+                adjacency[start] = []
+            if end not in adjacency:
+                adjacency[end] = []
+            adjacency[start].append(end)
+            adjacency[end].append(start)
+        
+        if start_node in adjacency:
+            destinations = adjacency[start_node]
+            print(f"✅ Node {start_node} can reach {len(destinations)} nodes:")
+            for dest in destinations:
+                print(f"  {start_node} → {dest}")
+        else:
+            print(f"❌ Node {start_node} has no connections")
+    
+    def publish_all_nodes(self):
+        """Publish all nodes from internal storage."""
+        print("🚀 Publishing all nodes from internal storage...")
+        try:
+            index = self.navigator.publish_all_nodes()
+            if index > 0:
+                print(f"✅ Successfully published nodes with index: {index}")
+            else:
+                print("⚠️ No nodes to publish")
+        except Exception as e:
+            print(f"❌ Error publishing nodes: {e}")
+    
+    def publish_all_edges(self):
+        """Publish all edges from internal storage."""
+        print("🚀 Publishing all edges from internal storage...")
+        try:
+            index = self.navigator.publish_all_edges()
+            if index > 0:
+                print(f"✅ Successfully published edges with index: {index}")
+            else:
+                print("⚠️ No edges to publish")
+        except Exception as e:
+            print(f"❌ Error publishing edges: {e}")
+    
+    def publish_all_nodes_and_edges(self):
+        """Publish all nodes and edges from internal storage."""
+        print("🚀 Publishing all nodes and edges from internal storage...")
+        try:
+            node_index, edge_index = self.navigator.publish_all_nodes_and_edges()
+            print(f"✅ Successfully published nodes and edges")
+            print(f"   📍 Node index: {node_index}")
+            print(f"   🔗 Edge index: {edge_index}")
+        except Exception as e:
+            print(f"❌ Error publishing nodes and edges: {e}")
+    
+    def clear_internal_storage(self):
+        """Clear all internal storage."""
+        print("🗑️ Clearing internal storage...")
+        try:
+            self.navigator.clear_internal_storage()
+            print("✅ Internal storage cleared successfully")
+        except Exception as e:
+            print(f"❌ Error clearing internal storage: {e}")
+    
+    def get_internal_storage_info(self):
+        """Get information about internal storage."""
+        print("📊 Internal Storage Information")
+        print("=" * 35)
+        try:
+            info = self.navigator.get_internal_storage_info()
+            print(f"📍 Nodes in storage: {info['nodes_count']}")
+            print(f"🔗 Edges in storage: {info['edges_count']}")
+            
+            if info['nodes_count'] > 0:
+                print(f"📍 Node IDs: {info['nodes']}")
+            
+            if info['edges_count'] > 0:
+                print(f"🔗 Edge IDs: {info['edges']}")
+            
+            if info['nodes_count'] == 0 and info['edges_count'] == 0:
+                print("📭 Internal storage is empty")
+                
+        except Exception as e:
+            print(f"❌ Error getting internal storage info: {e}")
+    
+    def auto_collect_node(self):
+        """Auto collect node at current pose (Demo B2 style)."""
+        print("📍 Auto collecting node at current pose...")
+        try:
+            success, _ = self.navigator.add_node_at_current_pose_auto_collect(auto_connect=True)
+            if success:
+                print("✅ Node auto-collected successfully")
+            else:
+                print("❌ Failed to auto-collect node")
+        except Exception as e:
+            print(f"❌ Error auto-collecting node: {e}")
+    
+    def collect_and_save_nodes_edges(self):
+        """Collect and save all nodes and edges (Demo B2 style)."""
+        print("💾 Collecting and saving all nodes and edges...")
+        try:
+            node_idx, edge_idx = self.navigator.collect_and_save_nodes_edges(clear_after_save=True)
+            if node_idx > 0 or edge_idx > 0:
+                print(f"✅ Successfully saved nodes and edges")
+                print(f"   📍 Node index: {node_idx}")
+                print(f"   🔗 Edge index: {edge_idx}")
+            else:
+                print("⚠️ No edges to save")
+        except Exception as e:
+            print(f"❌ Error collecting and saving: {e}")
+    
+    def auto_collect_loop(self):
+        """Start auto collection loop (Demo B2 style)."""
+        print("🔄 Starting auto collection loop...")
+        try:
+            interval = self.get_float_input("Enter collection interval (seconds)", 2.0)
+            max_nodes = self.get_int_input("Enter maximum nodes to collect", 10)
+            
+            print(f"🔄 Auto collection loop: {interval}s interval, max {max_nodes} nodes")
+            print("Press Ctrl+C to stop collection")
+            
+            self.navigator.auto_collect_loop(node_interval=interval, max_nodes=max_nodes)
+            
+        except KeyboardInterrupt:
+            print("⏹️ Auto collection stopped by user")
+        except Exception as e:
+            print(f"❌ Error in auto collection loop: {e}")
+    
+    def prepare_for_collection(self):
+        """Prepare for node/edge collection (Demo B2 style)."""
+        print("🔄 Preparing for node/edge collection...")
+        try:
+            self.navigator.prepare_for_collection()
+            print("✅ Preparation completed")
+        except Exception as e:
+            print(f"❌ Error preparing for collection: {e}")
+    
+    def clear_and_start_mapping(self):
+        """Clear all nodes/edges and start mapping (Demo B2 style)."""
+        print("🗑️ Clearing all nodes and edges...")
+        try:
+            self.navigator.clear_collection_and_start_mapping()
+            print("✅ Cleared and started mapping")
+        except Exception as e:
+            print(f"❌ Error clearing and starting mapping: {e}")
+    
+    def get_collection_status(self):
+        """Get collection status (Demo B2 style)."""
+        print("📊 Collection Status")
+        print("=" * 20)
+        try:
+            status = self.navigator.get_collection_status()
+            print(f"📍 Nodes collected: {status['nodes_collected']}")
+            print(f"🔗 Edges collected: {status['edges_collected']}")
+            
+            if status['nodes_collected'] > 0:
+                print(f"📍 Node IDs: {status['node_ids']}")
+                print(f"📍 Last node: {status['last_node']}")
+            
+            if status['edges_collected'] > 0:
+                print(f"🔗 Edge IDs: {status['edge_ids']}")
+                print(f"🔗 Last edge: {status['last_edge']}")
+            
+            if status['nodes_collected'] == 0 and status['edges_collected'] == 0:
+                print("📭 No nodes or edges collected yet")
+                
+        except Exception as e:
+            print(f"❌ Error getting collection status: {e}")
+    
     def get_nav_state(self):
         """Get navigation state."""
         print("📊 Getting navigation state...")
@@ -576,6 +946,21 @@ class InteractiveNavigator:
         print("  [DAE] Delete All Edges")
         print("  [QN] Query Nodes")
         print("  [QE] Query Edges")
+        print("  [NO] Network Overview (Complete network analysis)")
+        print("  [PA] Path Analysis (Find paths between nodes)")
+        print("\n💾 Internal Storage Management:")
+        print("  [PN] Publish All Nodes (from internal storage)")
+        print("  [PE] Publish All Edges (from internal storage)")
+        print("  [PNE] Publish All Nodes and Edges (from internal storage)")
+        print("  [CI] Clear Internal Storage")
+        print("  [GI] Get Internal Storage Info")
+        print("\n🔄 Auto Collection (Demo B2 Style):")
+        print("  [AC] Auto Collect Node at Current Pose")
+        print("  [CS] Collect and Save All Nodes/Edges")
+        print("  [AL] Auto Collect Loop")
+        print("  [PC] Prepare for Collection")
+        print("  [CM] Clear and Start Mapping")
+        print("  [GS] Get Collection Status")
         print("\n📷 Camera Control:")
         print("  [CA] Camera Control Menu")
         print("\n🎬 Visualization Control:")
@@ -699,6 +1084,45 @@ class InteractiveNavigator:
         
         elif command == 'QE':
             self.query_edges()
+        
+        elif command == 'NO':
+            self.query_network_overview()
+        
+        elif command == 'PA':
+            self.query_path_analysis()
+        
+        elif command == 'PN':
+            self.publish_all_nodes()
+        
+        elif command == 'PE':
+            self.publish_all_edges()
+        
+        elif command == 'PNE':
+            self.publish_all_nodes_and_edges()
+        
+        elif command == 'CI':
+            self.clear_internal_storage()
+        
+        elif command == 'GI':
+            self.get_internal_storage_info()
+        
+        elif command == 'AC':
+            self.auto_collect_node()
+        
+        elif command == 'CS':
+            self.collect_and_save_nodes_edges()
+        
+        elif command == 'AL':
+            self.auto_collect_loop()
+        
+        elif command == 'PC':
+            self.prepare_for_collection()
+        
+        elif command == 'CM':
+            self.clear_and_start_mapping()
+        
+        elif command == 'GS':
+            self.get_collection_status()
         
         elif command == 'NS':
             self.get_nav_state()
