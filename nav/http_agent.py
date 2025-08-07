@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 import rclpy
 from navigator import Navigator
+from dataclasses import dataclass
 
 
 class HTTPNavigatorAgent:
@@ -60,6 +61,10 @@ class HTTPNavigatorAgent:
         # ROS2 spin线程
         self.ros_thread = None
         self.running = False
+        
+        # 超时管理
+        self.timeout_threads = {}  # 存储超时线程的字典
+        self.mapping_timeout = None  # 当前建图超时时间
         
         self.logger.info(f"🌐 HTTP Navigator Agent 初始化完成")
         self.logger.info(f"📡 服务器地址: http://{host}:{port}")
@@ -165,7 +170,7 @@ class HTTPNavigatorAgent:
                         "结束建图": "POST /api/mapping/end"
                     },
                     "导航控制": {
-                        "开始导航": "POST /api/navigation/start",
+                        "开始导航": "POST /api/navigation/start_loop",
                         "暂停导航": "POST /api/navigation/pause", 
                         "恢复导航": "POST /api/navigation/recover"
                     },
@@ -203,8 +208,79 @@ class HTTPNavigatorAgent:
                     "相机数据": {
                         "获取相机数据": "POST /api/camera/data"
                     },
-                    "机器人状态": {
-                        "获取导航状态": "GET /api/robot/nav_state"
+                    "文档接口": {
+                        "自主建图": {
+                            "endpoint": "POST /robotic_control/navigation/autonomous_mapping",
+                            "description": "控制自主建图过程",
+                            "parameters": {
+                                "command": {
+                                    "type": "Int",
+                                    "required": True,
+                                    "description": "1表示开始,0表示终止"
+                                },
+                                "save": {
+                                    "type": "Bool", 
+                                    "required": True,
+                                    "description": "是否保存所建地图"
+                                },
+                                "save_path": {
+                                    "type": "String",
+                                    "required": False,
+                                    "description": "保存地图的路径"
+                                },
+                                "max_time_out": {
+                                    "type": "Long",
+                                    "required": False,
+                                    "description": "设置最长自主建图时间（秒）"
+                                }
+                            }
+                        },
+                        "机器狗定点导航": {
+                            "endpoint": "POST /robotic_control/navigation/fixed_point_nav",
+                            "description": "执行定点导航到指定坐标点",
+                            "parameters": {
+                                "goal_coordinates": {
+                                    "type": "Dict",
+                                    "required": False,
+                                    "description": "单个导航目标点的二维坐标值 {x, y, yaw}"
+                                },
+                                "goal_node_id": {
+                                    "type": "Int",
+                                    "required": False,
+                                    "description": "单个导航目标点的ID"
+                                },
+                                "map": {
+                                    "type": "String",
+                                    "required": False,
+                                    "description": "使用预先构建的地图"
+                                },
+                               
+                            }
+                        },
+                        "机器狗一键返回": "POST /robotic_control/navigation/go_home",
+                        "设置导航参数": {
+                            "endpoint": "POST /robotic_control/navigation/set_auto_nav",
+                            "description": "设置自动导航参数",
+                            "parameters": {
+                                "map": {
+                                    "type": "String",
+                                    "required": False,
+                                    "description": "使用的导航地图"
+                                },
+                                "area": {
+                                    "type": "List<Float>",
+                                    "required": False,
+                                    "description": "划定的导航区域范围"
+                                },
+                                "path_point": {
+                                    "type": "List<Float>",
+                                    "required": False,
+                                    "description": "设置的巡逻路径点"
+                                }
+                            }
+                        },
+                        "获取导航状态": "GET /robotic_control/navigation/get_nav_state",
+
                     }
                 },
                 "usage_example": {
@@ -258,14 +334,17 @@ class HTTPNavigatorAgent:
                 return jsonify({"success": False, "error": str(e)}), 500
         
         # 导航控制
-        @self.app.route('/api/navigation/start', methods=['POST'])
-        def start_navigation():
+        @self.app.route('/api/navigation/start_loop', methods=['POST'])
+        def start_loop_navigation():
             """开始导航"""
             try:
                 data = request.get_json() or {}
                 seq = data.get('seq', 'index:123;')
+                self.navigator.start_relocation()
+                self.navigator.start_navigation()
+                self.navigator.pose_init()
+                result = self.navigator.start_navigation_loop(seq)
                 
-                result = self.navigator.start_navigation(seq)
                 return jsonify({
                     "success": result,
                     "message": "导航命令已发送" if result else "导航命令发送失败",
@@ -356,58 +435,7 @@ class HTTPNavigatorAgent:
                 return jsonify({"success": False, "error": str(e)}), 500
         
         
-        # 查询操作
-        @self.app.route('/api/nodes/query', methods=['POST'])
-        def query_nodes():
-            """查询节点"""
-            try:
-                data = request.get_json() or {}
-                seq = data.get('seq', 'index:123;')
-                attribute = data.get('attribute', 1)
-                
-                self._log_api_call('/api/nodes/query', 'POST', data)
-                
-                result = self.navigator.query_node(seq, attribute)
-                message = "查询节点命令已发送" if result else "查询节点命令发送失败"
-                
-                self._log_api_call('/api/nodes/query', 'POST', data, result, message)
-                
-                return jsonify({
-                    "success": result,
-                    "message": message,
-                    "seq": seq,
-                    "attribute": attribute
-                })
-            except Exception as e:
-                error_msg = str(e)
-                self._log_api_call('/api/nodes/query', 'POST', data, False, f"异常: {error_msg}")
-                return jsonify({"success": False, "error": error_msg}), 500
-        
-        @self.app.route('/api/edges/query', methods=['POST'])
-        def query_edges():
-            """查询边"""
-            try:
-                data = request.get_json() or {}
-                seq = data.get('seq', 'index:123;')
-                attribute = data.get('attribute', 2)
-                
-                self._log_api_call('/api/edges/query', 'POST', data)
-                
-                result = self.navigator.query_edge(seq, attribute)
-                message = "查询边命令已发送" if result else "查询边命令发送失败"
-                
-                self._log_api_call('/api/edges/query', 'POST', data, result, message)
-                
-                return jsonify({
-                    "success": result,
-                    "message": message,
-                    "seq": seq,
-                    "attribute": attribute
-                })
-            except Exception as e:
-                error_msg = str(e)
-                self._log_api_call('/api/edges/query', 'POST', data, False, f"异常: {error_msg}")
-                return jsonify({"success": False, "error": error_msg}), 500
+
 
         @self.app.route('/api/nodes/delete', methods=['DELETE'])
         def delete_nodes():
@@ -482,42 +510,7 @@ class HTTPNavigatorAgent:
             except Exception as e:
                 return jsonify({"success": False, "error": str(e)}), 500
         
-        # 查询操作  
-        @self.app.route('/api/nodes/query', methods=['POST'])
-        def query_nodes():
-            """查询节点"""
-            try:
-                data = request.get_json() or {}
-                seq = data.get('seq', 'index:123;')
-                attribute = data.get('attribute', 1)
-                
-                result = self.navigator.query_node(seq, attribute)
-                return jsonify({
-                    "success": result,
-                    "message": "查询节点命令已发送" if result else "查询节点命令发送失败",
-                    "seq": seq,
-                    "attribute": attribute
-                })
-            except Exception as e:
-                return jsonify({"success": False, "error": str(e)}), 500
-        
-        @self.app.route('/api/edges/query', methods=['POST'])
-        def query_edges():
-            """查询边"""
-            try:
-                data = request.get_json() or {}
-                seq = data.get('seq', 'index:123;')
-                attribute = data.get('attribute', 2)
-                
-                result = self.navigator.query_edge(seq, attribute)
-                return jsonify({
-                    "success": result,
-                    "message": "查询边命令已发送" if result else "查询边命令发送失败",
-                    "seq": seq,
-                    "attribute": attribute
-                })
-            except Exception as e:
-                return jsonify({"success": False, "error": str(e)}), 500
+
         
         
         # 相机数据获取
@@ -559,16 +552,16 @@ class HTTPNavigatorAgent:
                 return jsonify({"success": False, "error": error_msg}), 500
         
         # 机器人导航状态
-        @self.app.route('/api/robot/nav_state', methods=['GET'])
+        @self.app.route('/robotic_control/navigation/get_nav_state', methods=['GET'])
         def get_nav_state():
             """获取机器人导航状态"""
             try:
-                self._log_api_call('/api/robot/nav_state', 'GET')
+                self._log_api_call('/robotic_control/navigation/get_nav_state', 'GET')
                 
                 nav_state = self.navigator.get_nav_state()
                 message = "导航状态获取成功"
                 
-                self._log_api_call('/api/robot/nav_state', 'GET', {}, True, message)
+                self._log_api_call('/robotic_control/navigation/get_nav_state', 'GET', {}, True, message)
                 
                 return jsonify({
                     "success": True,
@@ -578,7 +571,7 @@ class HTTPNavigatorAgent:
                 })
             except Exception as e:
                 error_msg = str(e)
-                self._log_api_call('/api/robot/nav_state', 'GET', {}, False, f"异常: {error_msg}")
+                self._log_api_call('/robotic_control/navigation/get_nav_state', 'GET', {}, False, f"异常: {error_msg}")
                 return jsonify({"success": False, "error": error_msg}), 500
 
         # 位姿操作
@@ -791,6 +784,261 @@ class HTTPNavigatorAgent:
             except Exception as e:
                 return jsonify({"success": False, "error": str(e)}), 500
         
+        # 自主建图
+        @self.app.route('/robotic_control/navigation/autonomous_mapping', methods=['POST'])
+        def autonomous_mapping():
+            """自主建图"""
+            try:
+                # 获取请求参数
+                data = request.get_json() or {}
+                
+                # 必需参数验证
+                if 'command' not in data:
+                    return jsonify({"success": False, "error": "缺少必需参数: command"}), 400
+                if 'save' not in data:
+                    return jsonify({"success": False, "error": "缺少必需参数: save"}), 400
+                
+                # 提取参数
+                command = data.get('command')  # 1表示开始，0表示终止
+                save = data.get('save')  # 是否保存所建地图
+                save_path = data.get('save_path', None)  # 保存地图的路径（可选）
+                max_time_out = data.get('max_time_out', 3600)  # 设置最长自主建图时间（秒）
+                
+                # 参数验证
+                if command not in [0, 1]:
+                    return jsonify({"success": False, "error": "command参数必须为0或1"}), 400
+                if not isinstance(save, bool):
+                    return jsonify({"success": False, "error": "save参数必须为布尔值"}), 400
+                if max_time_out <= 0:
+                    return jsonify({"success": False, "error": "max_time_out参数必须大于0"}), 400
+                
+                # 记录参数
+                self.logger.info(f"自主建图参数: command={command}, save={save}, "
+                               f"save_path={save_path}, max_time_out={max_time_out}s")
+                
+                # 根据command参数执行相应操作
+                if command == 1:
+                    # 开始自主建图
+                    self.navigator.start_mapping()
+                    message = "自主建图已开始"
+                    
+                    # 如果设置了超时时间，启动定时器自动关闭建图
+                    if max_time_out > 0:
+                        self.logger.info(f"设置建图超时时间: {max_time_out}秒")
+                        
+                        # 取消之前的超时线程（如果存在）
+                        if 'mapping_timeout' in self.timeout_threads:
+                            self.logger.info("取消之前的建图超时线程")
+                        
+                        # 启动后台线程来处理超时
+                        import threading
+                        def auto_stop_mapping():
+                            try:
+                                time.sleep(max_time_out)
+                                self.logger.info(f"建图超时时间到达({max_time_out}秒)，自动停止建图")
+                                
+                                # 停止建图
+                                self.navigator.end_mapping()
+                                
+                                # 如果需要保存地图
+                                if save:
+                                    try:
+                                        if save_path:
+                                            self.navigator.save_accumulated_cloud(save_path)
+                                        else:
+                                            self.navigator.save_accumulated_cloud("autonomous_mapping_result.pcd")
+                                        self.logger.info("超时停止建图后，地图已保存")
+                                    except Exception as save_error:
+                                        self.logger.error(f"超时停止建图后保存地图失败: {save_error}")
+                                
+                                # 清理超时线程记录
+                                if 'mapping_timeout' in self.timeout_threads:
+                                    del self.timeout_threads['mapping_timeout']
+                                    
+                            except Exception as e:
+                                self.logger.error(f"自动停止建图失败: {e}")
+                        
+                        # 启动超时线程
+                        timeout_thread = threading.Thread(target=auto_stop_mapping, daemon=True)
+                        timeout_thread.start()
+                        
+                        # 记录超时线程
+                        self.timeout_threads['mapping_timeout'] = {
+                            'thread': timeout_thread,
+                            'start_time': time.time(),
+                            'timeout': max_time_out,
+                            'save': save,
+                            'save_path': save_path
+                        }
+                        
+                        message += f"，将在{max_time_out}秒后自动停止"
+                        
+                elif command == 0:
+                    # 终止自主建图
+                    self.navigator.end_mapping()
+                    message = "自主建图已终止"
+                    
+                    # 取消超时线程（如果存在）
+                    if 'mapping_timeout' in self.timeout_threads:
+                        self.logger.info("手动停止建图，取消超时线程")
+                        del self.timeout_threads['mapping_timeout']
+                    
+                    # 如果需要保存地图
+                    if save:
+                        try:
+                            if save_path:
+                                # 使用指定路径保存
+                                self.navigator.save_accumulated_cloud(save_path)
+                            else:
+                                # 使用默认路径保存
+                                self.navigator.save_accumulated_cloud("autonomous_mapping_result.pcd")
+                            message += "，地图已保存"
+                        except Exception as save_error:
+                            self.logger.error(f"保存地图失败: {save_error}")
+                            message += "，但保存地图失败"
+                
+                return jsonify({
+                    "success": True,
+                    "message": message,
+                    "parameters": {
+                        "command": command,
+                        "save": save,
+                        "save_path": save_path,
+                        "max_time_out": max_time_out
+                    }
+                })
+            except Exception as e:
+                self.logger.error(f"自主建图失败: {e}")
+                return jsonify({"success": False, "error": str(e)}), 500
+        
+        # 定点导航
+        @self.app.route('/robotic_control/navigation/fixed_point_nav', methods=['POST'])
+        def fixed_point_navigation():
+            """定点导航"""
+            try:
+                # 获取请求参数
+                data = request.get_json() or {}
+                
+                
+                # 提取参数
+                goal_coordinates_data = data.get('goal_coordinates', {'x': 0.0, 'y': 0.0, 'yaw': 0.0})  # 目标点坐标
+                map_name = data.get('map', 'default')  # String 使用的地图名称
+                goal_node_id = data.get('goal_node_id', None)  # Int 目标点ID
+                
+                
+                # 参数验证
+                if not isinstance(goal_coordinates_data, dict):
+                    return jsonify({"success": False, "error": "goal_coordinates必须是对象格式"}), 400
+                
+                try:
+                    x = float(goal_coordinates_data.get('x', 0.0))
+                    y = float(goal_coordinates_data.get('y', 0.0))
+                    goal_yaw = float(goal_coordinates_data.get('yaw', 0.0))
+                except (ValueError, TypeError):
+                    return jsonify({"success": False, "error": "goal_coordinates中的坐标值必须是数字"}), 400
+                
+                if not isinstance(goal_yaw, (int, float)):
+                    return jsonify({"success": False, "error": "goal_yaw必须是数字"}), 400
+                
+                # 记录参数
+                self.logger.info(f"定点导航参数: goal_coordinates=[{x}, {y}], map={map_name}, goal_yaw={goal_yaw}")
+                
+                # 获取当前位姿
+                current_pose = self.navigator.get_current_pose()
+                if current_pose is None:
+                    return jsonify({"success": False, "error": "无法获取当前位姿，请先初始化位姿"}), 400
+                
+                # 执行定点导航
+                try:
+                    # 这里需要根据实际的导航系统实现来调用相应的方法
+                    # 假设navigator有navigate_to_point方法
+                    success = self.navigator.navigate_to_point(
+                        x=x,
+                        y=y,
+                        yaw=goal_yaw,
+                        goal_node_id=goal_node_id,
+                        map_name=map_name
+                    )
+                    
+                    if success:
+                        message = f"定点导航已启动，目标点: ({x:.2f}, {y:.2f}), 目标点ID: {goal_node_id}, 目标角度: {goal_yaw:.2f}°"
+                        self.logger.info(message)
+                    else:
+                        message = "定点导航启动失败"
+                        self.logger.error(message)
+                        return jsonify({"success": False, "error": message}), 500
+                        
+                except Exception as nav_error:
+                    error_msg = f"导航执行失败: {str(nav_error)}"
+                    self.logger.error(error_msg)
+                    return jsonify({"success": False, "error": error_msg}), 500
+                
+                return jsonify({
+                    "success": True,
+                    "message": message,
+                    "parameters": {
+                        "goal_coordinates": goal_coordinates_data,
+                        "map": map_name,
+                        "goal_yaw": goal_yaw,
+                        "current_pose": {
+                            "x": current_pose['position'][0],
+                            "y": current_pose['position'][1],
+                            "z": current_pose['position'][2],
+                            "yaw": current_pose['euler'][2]
+                        }
+                    }
+                })
+                
+            except Exception as e:
+                self.logger.error(f"定点导航失败: {e}")
+                return jsonify({"success": False, "error": str(e)}), 500
+        
+        @self.app.route('/robotic_control/navigation/go_home', methods=['POST'])
+        def go_home():
+            """一键返回"""
+            try:
+                self.navigator.go_home()
+                return jsonify({"success": True, "message": "一键返回已启动"})
+            except Exception as e:
+                return jsonify({"success": False, "error": str(e)}), 500
+
+        @self.app.route('/robotic_control/navigation/set_auto_nav', methods=['POST'])
+        def set_auto_nav():
+            """设置自动导航"""
+            try:
+                data = request.get_json() or {}
+                
+                # 提取参数
+                map_name = data.get('map', 'default')  # String 使用的导航地图
+                area = data.get('area', [])  # List<Float> 划定的导航区域范围
+                path_point = data.get('path_point', [])  # List<Float> 设置的巡逻路径点
+                
+                # 参数验证
+                if not isinstance(area, list):
+                    return jsonify({"success": False, "error": "area参数必须是数组"}), 400
+                
+                if not isinstance(path_point, list):
+                    return jsonify({"success": False, "error": "path_point参数必须是数组"}), 400
+                
+                # 记录参数
+                self.logger.info(f"设置自动导航参数: map={map_name}, area={area}, path_point={path_point}")
+                
+                # 调用navigator方法设置自动导航
+                result = self.navigator.set_auto_nav(map_name=map_name, area=area, path_point=path_point)
+                
+                return jsonify({
+                    "success": result,
+                    "message": "自动导航参数设置成功" if result else "自动导航参数设置失败",
+                    "parameters": {
+                        "map": map_name,
+                        "area": area,
+                        "path_point": path_point
+                    }
+                })
+            except Exception as e:
+                self.logger.error(f"设置自动导航失败: {e}")
+                return jsonify({"success": False, "error": str(e)}), 500
+
         # 系统状态
         @self.app.route('/api/status', methods=['GET'])
         def get_system_status():
@@ -812,6 +1060,27 @@ class HTTPNavigatorAgent:
                     "total_cloud_points": cloud_size + traj_size,
                     "timestamp": time.time()
                 }
+                
+                # 添加超时状态信息
+                timeout_info = {}
+                if 'mapping_timeout' in self.timeout_threads:
+                    timeout_data = self.timeout_threads['mapping_timeout']
+                    elapsed_time = time.time() - timeout_data['start_time']
+                    remaining_time = max(0, timeout_data['timeout'] - elapsed_time)
+                    timeout_info = {
+                        "mapping_timeout_active": True,
+                        "timeout_duration": timeout_data['timeout'],
+                        "elapsed_time": elapsed_time,
+                        "remaining_time": remaining_time,
+                        "will_save": timeout_data['save'],
+                        "save_path": timeout_data['save_path']
+                    }
+                else:
+                    timeout_info = {
+                        "mapping_timeout_active": False
+                    }
+                
+                status.update(timeout_info)
                 
                 return jsonify({
                     "success": True,
@@ -914,3 +1183,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
