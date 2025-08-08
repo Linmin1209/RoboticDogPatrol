@@ -1462,73 +1462,232 @@ class Navigator(Node):
     def notice_callback(self, msg: String) -> None:
         """
         Callback function for processing qt_notice messages.
+        收集发送信息后缓存等待时间内所有接收到的notice信息，然后逐个匹配。
         
         Args:
             msg: String message containing command execution feedback
         """
         try:
             with self.notice_lock:
+                notice_data = msg.data
+                current_time = time.time()
+                
+                # 更新最后接收到的notice
                 self.last_notice = {
-                    'message': msg.data,
-                    'timestamp': time.time()
+                    'message': notice_data,
+                    'timestamp': current_time
                 }
                 
-                notice_data = msg.data
                 self.get_logger().info(f"📢 Received notice: {notice_data}")
                 
-                # 简化解析逻辑：只要找到index数字就认为是正确的匹配
-                seq_id = None
-                success = False
+                # 将notice信息添加到缓存队列中
+                notice_info = {
+                    'message': notice_data,
+                    'timestamp': current_time,
+                    'raw_data': notice_data
+                }
                 
-                # 查找所有数字
-                import re
-                numbers = re.findall(r'\b\d+\b', notice_data)
+                # 添加到notice缓存队列
+                if not hasattr(self, 'notice_cache_queue'):
+                    self.notice_cache_queue = []
                 
-                if numbers:
-                    # 找到最大的数字作为序列ID（通常是3位或以上的数字）
-                    potential_ids = [int(num) for num in numbers if len(num) >= 3]
-                    if potential_ids:
-                        seq_id = str(max(potential_ids))
-                        self.get_logger().info(f"🔍 Found index: {seq_id} from message: {notice_data}")
-                    else:
-                        # 如果没有3位以上的数字，使用最大的数字
-                        seq_id = str(max([int(num) for num in numbers]))
-                        self.get_logger().info(f"🔍 Found index: {seq_id} from message: {notice_data}")
-                else:
-                    self.get_logger().warning(f"⚠️ No numbers found in notice: {notice_data}")
+                self.notice_cache_queue.append(notice_info)
                 
-                # 判断成功状态：只要找到index就认为是成功的
-                success = seq_id is not None
+                # 清理过期的缓存信息（超过30秒的）
+                current_time = time.time()
+                self.notice_cache_queue = [
+                    notice for notice in self.notice_cache_queue 
+                    if current_time - notice['timestamp'] <= 30.0
+                ]
                 
-                # 如果找到了序列ID，存储确认信息
-                if seq_id:
-                    self.command_confirmations[seq_id] = {
-                        'message': notice_data,
-                        'timestamp': time.time(),
-                        'success': success,
-                        'raw_data': notice_data  # 保存原始数据用于调试
-                    }
-                    
-                    self.get_logger().info(f"✅ Command confirmation stored for sequence: {seq_id}")
-                    self.get_logger().info(f"   📋 Success: {success}")
-                    self.get_logger().info(f"   📝 Message: {notice_data}")
-                else:
-                    # 如果没有找到序列ID，记录原始消息用于调试
-                    self.get_logger().warning(f"⚠️ Could not extract sequence ID from notice: {notice_data}")
-                    # 存储到特殊键中用于调试
-                    debug_key = f"debug_{int(time.time())}"
-                    self.command_confirmations[debug_key] = {
-                        'message': notice_data,
-                        'timestamp': time.time(),
-                        'success': success,
-                        'raw_data': notice_data,
-                        'note': 'No sequence ID found'
-                    }
+                self.get_logger().info(f"📦 Notice cached. Queue size: {len(self.notice_cache_queue)}")
+                
+                # 如果有待匹配的命令序列，尝试匹配
+                if hasattr(self, 'pending_command_seq') and self.pending_command_seq:
+                    self._try_match_notice_with_command(notice_data, current_time)
                 
         except Exception as e:
             self.get_logger().error(f"Error processing notice: {e}")
             import traceback
             traceback.print_exc()
+    
+    def _try_match_notice_with_command(self, notice_data: str, current_time: float) -> None:
+        """
+        尝试将notice信息与待匹配的命令序列进行匹配。
+        
+        Args:
+            notice_data: 接收到的notice消息
+            current_time: 当前时间戳
+        """
+        try:
+            # 从notice中提取序列ID
+            seq_id = self._extract_seq_id_from_notice(notice_data)
+            
+            if seq_id and seq_id in self.pending_command_seq:
+                # 找到匹配的序列ID
+                self.get_logger().info(f"🎯 Found matching sequence ID: {seq_id}")
+                
+                # 判断成功状态：只要找到匹配的序列ID就认为是成功的
+                success = True
+                
+                # 存储确认信息
+                self.command_confirmations[seq_id] = {
+                    'message': notice_data,
+                    'timestamp': current_time,
+                    'success': success,
+                    'raw_data': notice_data,
+                    'matched': True
+                }
+                
+                # 从待匹配列表中移除
+                self.pending_command_seq.remove(seq_id)
+                
+                self.get_logger().info(f"✅ Command confirmation stored for sequence: {seq_id}")
+                self.get_logger().info(f"   📋 Success: {success}")
+                self.get_logger().info(f"   📝 Message: {notice_data}")
+                self.get_logger().info(f"   📊 Remaining pending commands: {len(self.pending_command_seq)}")
+                
+            elif seq_id:
+                # 找到了序列ID但没有匹配的待处理命令
+                self.get_logger().info(f"ℹ️ Found sequence ID {seq_id} but no matching pending command")
+                
+            else:
+                # 没有找到序列ID
+                self.get_logger().debug(f"🔍 No sequence ID found in notice: {notice_data}")
+                
+        except Exception as e:
+            self.get_logger().error(f"Error matching notice with command: {e}")
+    
+    def _extract_seq_id_from_notice(self, notice_data: str) -> Optional[str]:
+        """
+        从notice消息中提取序列ID。
+        
+        Args:
+            notice_data: notice消息内容
+            
+        Returns:
+            提取到的序列ID，如果没有找到则返回None
+        """
+        try:
+            import re
+            numbers = re.findall(r'\b\d+\b', notice_data)
+            
+            if numbers:
+                # 找到最大的数字作为序列ID（通常是3位或以上的数字）
+                potential_ids = [int(num) for num in numbers if len(num) >= 3]
+                if potential_ids:
+                    seq_id = str(max(potential_ids))
+                    self.get_logger().debug(f"🔍 Extracted index: {seq_id} from message: {notice_data}")
+                    return seq_id
+                else:
+                    # 如果没有3位以上的数字，使用最大的数字
+                    seq_id = str(max([int(num) for num in numbers]))
+                    self.get_logger().debug(f"🔍 Extracted index: {seq_id} from message: {notice_data}")
+                    return seq_id
+            else:
+                self.get_logger().debug(f"⚠️ No numbers found in notice: {notice_data}")
+                return None
+                
+        except Exception as e:
+            self.get_logger().error(f"Error extracting sequence ID: {e}")
+            return None
+    
+    def get_pending_command_sequences(self) -> List[str]:
+        """
+        获取当前待匹配的命令序列列表。
+        
+        Returns:
+            待匹配的命令序列ID列表
+        """
+        if not hasattr(self, 'pending_command_seq'):
+            self.pending_command_seq = []
+        return self.pending_command_seq.copy()
+    
+    def clear_pending_command_sequences(self) -> None:
+        """
+        清空待匹配的命令序列列表。
+        """
+        if hasattr(self, 'pending_command_seq'):
+            self.pending_command_seq.clear()
+            self.get_logger().info("🗑️ Cleared pending command sequences")
+    
+    def remove_pending_command_sequence(self, seq_id: str) -> bool:
+        """
+        从待匹配列表中移除指定的序列ID。
+        
+        Args:
+            seq_id: 要移除的序列ID
+            
+        Returns:
+            是否成功移除
+        """
+        if hasattr(self, 'pending_command_seq') and seq_id in self.pending_command_seq:
+            self.pending_command_seq.remove(seq_id)
+            self.get_logger().info(f"🗑️ Removed sequence ID {seq_id} from pending list")
+            return True
+        return False
+    
+    def get_notice_cache_queue_info(self) -> dict:
+        """
+        获取notice缓存队列的信息。
+        
+        Returns:
+            包含缓存队列信息的字典
+        """
+        if not hasattr(self, 'notice_cache_queue'):
+            self.notice_cache_queue = []
+        
+        current_time = time.time()
+        # 清理过期的缓存信息
+        self.notice_cache_queue = [
+            notice for notice in self.notice_cache_queue 
+            if current_time - notice['timestamp'] <= 30.0
+        ]
+        
+        return {
+            'queue_size': len(self.notice_cache_queue),
+            'oldest_timestamp': self.notice_cache_queue[0]['timestamp'] if self.notice_cache_queue else None,
+            'newest_timestamp': self.notice_cache_queue[-1]['timestamp'] if self.notice_cache_queue else None,
+            'cache_duration': 30.0
+        }
+    
+    def get_matching_status_info(self) -> dict:
+        """
+        获取命令匹配状态的详细信息。
+        
+        Returns:
+            包含匹配状态信息的字典
+        """
+        pending_sequences = self.get_pending_command_sequences()
+        cache_info = self.get_notice_cache_queue_info()
+        
+        # 分析缓存队列中的序列ID
+        cached_seq_ids = []
+        if hasattr(self, 'notice_cache_queue'):
+            for notice in self.notice_cache_queue:
+                seq_id = self._extract_seq_id_from_notice(notice['message'])
+                if seq_id:
+                    cached_seq_ids.append({
+                        'seq_id': seq_id,
+                        'message': notice['message'],
+                        'timestamp': notice['timestamp']
+                    })
+        
+        # 找出匹配和未匹配的序列ID
+        matched_seq_ids = [seq for seq in pending_sequences if seq in [item['seq_id'] for item in cached_seq_ids]]
+        unmatched_seq_ids = [seq for seq in pending_sequences if seq not in [item['seq_id'] for item in cached_seq_ids]]
+        
+        return {
+            'pending_sequences': pending_sequences,
+            'cached_notices': cached_seq_ids,
+            'matched_sequences': matched_seq_ids,
+            'unmatched_sequences': unmatched_seq_ids,
+            'cache_queue_info': cache_info,
+            'total_pending': len(pending_sequences),
+            'total_cached': len(cached_seq_ids),
+            'total_matched': len(matched_seq_ids),
+            'total_unmatched': len(unmatched_seq_ids)
+        }
 
     def get_current_pose(self) -> Optional[dict]:
         """
@@ -1635,6 +1794,7 @@ class Navigator(Node):
     def wait_for_command_confirmation(self, seq_id: str, timeout: float = 5.0) -> Optional[dict]:
         """
         Wait for command execution confirmation with specified timeout.
+        使用新的匹配机制：检查notice缓存队列中是否有匹配的序列ID。
         
         Args:
             seq_id: Sequence ID to wait for (e.g., "123")
@@ -1659,6 +1819,7 @@ class Navigator(Node):
         
         start_time = time.time()
         while time.time() - start_time < timeout:
+            # 检查是否已经匹配成功
             with self.notice_lock:
                 if seq_id in self.command_confirmations:
                     confirmation = self.command_confirmations[seq_id].copy()
@@ -1666,6 +1827,17 @@ class Navigator(Node):
                     # Destroy notice subscriber after successful confirmation
                     self._destroy_notice_subscriber()
                     return confirmation
+            
+            # 检查notice缓存队列中是否有匹配的消息
+            if hasattr(self, 'notice_cache_queue'):
+                with self.notice_lock:
+                    for notice in self.notice_cache_queue:
+                        extracted_seq_id = self._extract_seq_id_from_notice(notice['message'])
+                        if extracted_seq_id == seq_id:
+                            # 找到匹配的notice，手动触发匹配
+                            self._try_match_notice_with_command(notice['message'], notice['timestamp'])
+                            break
+            
             time.sleep(0.1)  # Small delay to avoid busy waiting
         
         # 详细的超时错误信息
@@ -2003,6 +2175,16 @@ class Navigator(Node):
         if hasattr(msg, 'seq'):
             msg.seq.data = seq_string
         
+        # Initialize pending command sequence list if not exists
+        if not hasattr(self, 'pending_command_seq'):
+            self.pending_command_seq = []
+        
+        # Add sequence ID to pending list for matching
+        if wait_for_confirmation:
+            seq_id = str(index)
+            self.pending_command_seq.append(seq_id)
+            self.get_logger().info(f"📝 Added sequence ID {seq_id} to pending list. Total pending: {len(self.pending_command_seq)}")
+        
         # Create notice subscriber and cache data if confirmation is needed
         if wait_for_confirmation:
             self.get_logger().info(f"📢 Creating notice subscriber and caching data for {cache_duration}s before publishing command {index}")
@@ -2037,9 +2219,17 @@ class Navigator(Node):
                     self.get_logger().info(f"✅ Command {index} confirmed successfully")
                 else:
                     self.get_logger().warning(f"⚠️ Command {index} confirmation timeout")
+                    # 如果超时，从待匹配列表中移除
+                    if seq_id in self.pending_command_seq:
+                        self.pending_command_seq.remove(seq_id)
+                        self.get_logger().info(f"🗑️ Removed timeout sequence ID {seq_id} from pending list")
                 return index
             except Exception as e:
                 self.get_logger().error(f"❌ Error waiting for command {index} confirmation: {e}")
+                # 如果出错，从待匹配列表中移除
+                if seq_id in self.pending_command_seq:
+                    self.pending_command_seq.remove(seq_id)
+                    self.get_logger().info(f"🗑️ Removed error sequence ID {seq_id} from pending list")
                 return index
         
         return index
@@ -2502,3 +2692,5 @@ def main():
 
 if __name__ == "__main__":
     main() 
+
+
