@@ -873,6 +873,168 @@ class InteractiveNavigator:
         except Exception as e:
             print(f"❌ Error getting collection status: {e}")
     
+    def configure_notice_cache(self):
+        """Configure notice cache parameters."""
+        print("⚙️ Configure Notice Cache")
+        print("=" * 30)
+        try:
+            duration = self.get_float_input("Enter cache duration (seconds)", 2.0)
+            auto_cache = input("Enable auto cache (y/n, default: y): ").lower().strip() != 'n'
+            
+            config = self.navigator.configure_notice_cache(
+                cache_duration=duration,
+                auto_cache=auto_cache
+            )
+            
+            print("✅ Notice cache configuration updated:")
+            print(f"   ⏱️ Cache duration: {config['cache_duration']}s")
+            print(f"   🔄 Auto cache: {config['auto_cache']}")
+            
+        except Exception as e:
+            print(f"❌ Error configuring notice cache: {e}")
+    
+    def get_notice_cache_status(self):
+        """Get notice cache status."""
+        print("📊 Notice Cache Status")
+        print("=" * 25)
+        try:
+            status = self.navigator.get_notice_cache_status()
+            
+            print(f"📢 Subscriber active: {'✅ Yes' if status['subscriber_active'] else '❌ No'}")
+            print(f"📋 Cached messages: {status['cached_messages']}")
+            print(f"📡 Notice topic: {status['notice_topic']}")
+            
+            if status['last_notice']:
+                print(f"📝 Last notice: {status['last_notice']['message']}")
+                print(f"⏰ Last notice time: {status['last_notice']['timestamp']}")
+            else:
+                print("📝 Last notice: None")
+            
+            if status['cached_messages'] > 0:
+                print(f"🔍 Command confirmations: {list(status['command_confirmations'].keys())}")
+            
+        except Exception as e:
+            print(f"❌ Error getting notice cache status: {e}")
+    
+    def test_notice_cache(self):
+        """Test notice cache functionality."""
+        print("🧪 Test Notice Cache")
+        print("=" * 20)
+        try:
+            duration = self.get_float_input("Enter test duration (seconds)", 3.0)
+            
+            print(f"🧪 Testing notice cache for {duration}s...")
+            results = self.navigator.test_notice_cache(duration=duration)
+            
+            print("✅ Notice cache test completed:")
+            print(f"   ✅ Cache working: {results['cache_working']}")
+            print(f"   📊 Cached messages: {results['cache_result']['cached_count']}")
+            print(f"   ⏱️ Test duration: {results['test_duration']}s")
+            
+        except Exception as e:
+            print(f"❌ Error testing notice cache: {e}")
+    
+    def get_pending_command_sequences(self):
+        """Get pending command sequences."""
+        print("📋 Pending Command Sequences")
+        print("=" * 30)
+        
+        try:
+            pending_sequences = self.navigator.get_pending_command_sequences()
+            
+            if pending_sequences:
+                print(f"📝 Found {len(pending_sequences)} pending sequences:")
+                for i, seq_id in enumerate(pending_sequences, 1):
+                    print(f"  {i}. Sequence ID: {seq_id}")
+            else:
+                print("📝 No pending command sequences found")
+                
+        except Exception as e:
+            print(f"❌ Error getting pending sequences: {e}")
+    
+    def clear_pending_command_sequences(self):
+        """Clear pending command sequences."""
+        print("🗑️ Clear Pending Command Sequences")
+        print("=" * 35)
+        
+        try:
+            pending_sequences = self.navigator.get_pending_command_sequences()
+            
+            if pending_sequences:
+                print(f"📝 Found {len(pending_sequences)} pending sequences:")
+                for seq_id in pending_sequences:
+                    print(f"  - Sequence ID: {seq_id}")
+                
+                confirm = input("❓ Are you sure you want to clear all pending sequences? (y/N): ").strip().lower()
+                if confirm == 'y':
+                    self.navigator.clear_pending_command_sequences()
+                    print("✅ All pending sequences cleared")
+                else:
+                    print("❌ Operation cancelled")
+            else:
+                print("📝 No pending sequences to clear")
+                
+        except Exception as e:
+            print(f"❌ Error clearing pending sequences: {e}")
+    
+    def get_matching_status_info(self):
+        """Get detailed matching status information."""
+        print("📊 Matching Status Information")
+        print("=" * 35)
+        
+        try:
+            matching_info = self.navigator.get_matching_status_info()
+            
+            print(f"📋 Pending sequences: {matching_info['total_pending']}")
+            print(f"📦 Cached notices: {matching_info['total_cached']}")
+            print(f"✅ Matched sequences: {matching_info['total_matched']}")
+            print(f"⏳ Unmatched sequences: {matching_info['total_unmatched']}")
+            
+            if matching_info['pending_sequences']:
+                print(f"\n📝 Pending sequences: {matching_info['pending_sequences']}")
+            
+            if matching_info['matched_sequences']:
+                print(f"✅ Matched sequences: {matching_info['matched_sequences']}")
+            
+            if matching_info['unmatched_sequences']:
+                print(f"⏳ Unmatched sequences: {matching_info['unmatched_sequences']}")
+            
+            if matching_info['cached_notices']:
+                print(f"\n📦 Cached notices ({len(matching_info['cached_notices'])}):")
+                for i, notice in enumerate(matching_info['cached_notices'][:5], 1):  # 只显示前5个
+                    print(f"  {i}. Seq ID: {notice['seq_id']}, Time: {notice['timestamp']:.2f}s ago")
+                    print(f"     Message: {notice['message'][:50]}...")
+                if len(matching_info['cached_notices']) > 5:
+                    print(f"  ... and {len(matching_info['cached_notices']) - 5} more")
+            
+            # 显示缓存队列信息
+            cache_info = matching_info['cache_queue_info']
+            print(f"\n📊 Cache queue info:")
+            print(f"  Queue size: {cache_info['queue_size']}")
+            print(f"  Cache duration: {cache_info['cache_duration']}s")
+            
+        except Exception as e:
+            print(f"❌ Error getting matching status: {e}")
+    
+    def get_notice_cache_queue_info(self):
+        """Get notice cache queue information."""
+        print("📦 Notice Cache Queue Information")
+        print("=" * 35)
+        
+        try:
+            cache_info = self.navigator.get_notice_cache_queue_info()
+            
+            print(f"📦 Queue size: {cache_info['queue_size']}")
+            print(f"⏱️ Cache duration: {cache_info['cache_duration']}s")
+            
+            if cache_info['oldest_timestamp']:
+                print(f"📅 Oldest notice: {cache_info['oldest_timestamp']:.2f}s ago")
+            if cache_info['newest_timestamp']:
+                print(f"📅 Newest notice: {cache_info['newest_timestamp']:.2f}s ago")
+            
+        except Exception as e:
+            print(f"❌ Error getting cache queue info: {e}")
+    
     def get_nav_state(self):
         """Get navigation state."""
         print("📊 Getting navigation state...")
@@ -961,6 +1123,14 @@ class InteractiveNavigator:
         print("  [PC] Prepare for Collection")
         print("  [CM] Clear and Start Mapping")
         print("  [GS] Get Collection Status")
+        print("\n📢 Notice Cache Control:")
+        print("  [NC] Configure Notice Cache")
+        print("  [NCS] Get Notice Cache Status")
+        print("  [NT] Test Notice Cache")
+        print("  [PS] Get Pending Command Sequences")
+        print("  [PCS] Clear Pending Command Sequences")
+        print("  [MS] Get Matching Status Information")
+        print("  [NQ] Get Notice Cache Queue Info")
         print("\n📷 Camera Control:")
         print("  [CA] Camera Control Menu")
         print("\n🎬 Visualization Control:")
@@ -1132,6 +1302,27 @@ class InteractiveNavigator:
         
         elif command == 'RT':
             self.check_realtime_pose_status()
+        
+        elif command == 'NC':
+            self.configure_notice_cache()
+        
+        elif command == 'NCS':
+            self.get_notice_cache_status()
+        
+        elif command == 'NT':
+            self.test_notice_cache()
+        
+        elif command == 'PS':
+            self.get_pending_command_sequences()
+        
+        elif command == 'PCS':
+            self.clear_pending_command_sequences()
+        
+        elif command == 'MS':
+            self.get_matching_status_info()
+        
+        elif command == 'NQ':
+            self.get_notice_cache_queue_info()
         
         elif command == 'H':
             self.show_help()
