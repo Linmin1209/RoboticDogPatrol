@@ -313,6 +313,266 @@ class HTTPNavigatorAgent:
                         },
                         "获取导航状态": "GET /robotic_control/navigation/get_nav_state",
 
+                    },
+                    "机械臂控制": {
+                        "获取机械臂位姿": {
+                            "endpoint": "POST /robotic_control/robotic_arm/get_pose",
+                            "description": "获取机械臂末端位姿",
+                            "parameters": {},
+                            "response": {
+                                "code": "String",
+                                "message": "String", 
+                                "data": {
+                                    "status": "Bool",
+                                    "x": "Float",
+                                    "y": "Float",
+                                    "z": "Float",
+                                    "roll": "Float",
+                                    "yaw": "Float",
+                                    "pitch": "Float"
+                                }
+                            }
+                        },
+                        "机械臂返回默认位置": {
+                            "endpoint": "POST /robotic_control/robotic_arm/go_home",
+                            "description": "机械臂返回默认位置",
+                            "parameters": {},
+                            "response": {
+                                "code": "String",
+                                "message": "String",
+                                "data": {
+                                    "status": "Bool"
+                                }
+                            }
+                        },
+                        "机械臂移动到指定位置": {
+                            "endpoint": "POST /robotic_control/robotic_arm/move_to",
+                            "description": "机械臂移动到指定位置",
+                            "parameters": {
+                                "x": {
+                                    "type": "Float",
+                                    "required": True,
+                                    "description": "x方向位置"
+                                },
+                                "y": {
+                                    "type": "Float",
+                                    "required": True,
+                                    "description": "y方向位置"
+                                },
+                                "z": {
+                                    "type": "Float",
+                                    "required": True,
+                                    "description": "z方向位置"
+                                },
+                                "roll": {
+                                    "type": "Float",
+                                    "required": True,
+                                    "description": "方向角roll"
+                                },
+                                "yaw": {
+                                    "type": "Float",
+                                    "required": True,
+                                    "description": "方向角yaw"
+                                },
+                                "pitch": {
+                                    "type": "Float",
+                                    "required": True,
+                                    "description": "方向角pitch"
+                                }
+                            },
+                            "response": {
+                                "code": "String",
+                                "message": "String",
+                                "data": {
+                                    "status": "Bool"
+                                }
+                            }
+                        },
+                        "机械臂末端移动到指定位置": {
+                            "endpoint": "POST /robotic_control/robotic_arm/ee_move_to",
+                            "description": "机械臂末端移动到指定位置，仅移动末端关节，用于微调位姿",
+                            "parameters": {
+                                "x": {
+                                    "type": "Float",
+                                    "required": True,
+                                    "description": "x方向位置"
+                                },
+                                "y": {
+                                    "type": "Float",
+                                    "required": True,
+                                    "description": "y方向位置"
+                                },
+                                "z": {
+                                    "type": "Float",
+                                    "required": True,
+                                    "description": "z方向位置"
+                                },
+                                "roll": {
+                                    "type": "Float",
+                                    "required": True,
+                                    "description": "方向角roll"
+                                },
+                                "yaw": {
+                                    "type": "Float",
+                                    "required": True,
+                                    "description": "方向角yaw"
+                                },
+                                "pitch": {
+                                    "type": "Float",
+                                    "required": True,
+                                    "description": "方向角pitch"
+                                }
+                            },
+                            "response": {
+                                "code": "String",
+                                "message": "String",
+                                "data": {
+                                    "status": "Bool"
+                                }
+                            }
+                        },
+                        "机械臂末端相机获取": {
+                            "endpoint": "POST /robotic_control/robotic_arm/get_camera",
+                            "description": "机械臂末端相机获取图像数据",
+                            "parameters": {
+                                "rgb": {
+                                    "type": "Bool",
+                                    "required": False,
+                                    "description": "是否需要RGB图像",
+                                    "default": False
+                                },
+                                "depth": {
+                                    "type": "Bool",
+                                    "required": False,
+                                    "description": "是否需要深度图像",
+                                    "default": False
+                                }
+                            },
+                            "response": {
+                                "code": "String",
+                                "message": "String",
+                                "data": {
+                                    "status": "Bool",
+                                    "images": "List"
+                                }
+                            }
+                        },
+                        "机械臂夹爪开合": {
+                            "endpoint": "POST /robotic_control/robotic_arm/set_gripper",
+                            "description": "机械臂夹爪开合控制",
+                            "parameters": {
+                                "value": {
+                                    "type": "Float",
+                                    "required": True,
+                                    "description": "开合角度，范围(0,1)"
+                                }
+                            },
+                            "response": {
+                                "code": "String",
+                                "message": "String",
+                                "data": {
+                                    "status": "Bool"
+                                }
+                            }
+                        },
+                        "机械臂开关门": {
+                            "endpoint": "POST /robotic_control/open_door",
+                            "description": "机械臂开关门操作",
+                            "parameters": {
+                                "open": {
+                                    "type": "Bool",
+                                    "required": True,
+                                    "description": "开门/关门"
+                                },
+                                "direction": {
+                                    "type": "String",
+                                    "required": True,
+                                    "description": "开门方向，值为'left'或'right'"
+                                }
+                            },
+                            "response": {
+                                "code": "String",
+                                "message": "String",
+                                "data": {
+                                    "status": "Bool"
+                                }
+                            }
+                        }
+                    },
+                    "协作臂控制": {
+                        "协作臂返回默认位置": {
+                            "endpoint": "POST /robotic_control/collaborative_arm/go_home",
+                            "description": "协作臂返回默认位置",
+                            "parameters": {},
+                            "response": {
+                                "code": "String",
+                                "message": "String",
+                                "data": {
+                                    "status": "Bool"
+                                }
+                            }
+                        },
+                        "协作臂移动到指定位置": {
+                            "endpoint": "POST /robotic_control/collaborative_arm/move_to",
+                            "description": "协作臂移动到指定位置",
+                            "parameters": {
+                                "x": {
+                                    "type": "Float",
+                                    "required": True,
+                                    "description": "x方向位置"
+                                },
+                                "y": {
+                                    "type": "Float",
+                                    "required": True,
+                                    "description": "y方向位置"
+                                },
+                                "z": {
+                                    "type": "Float",
+                                    "required": True,
+                                    "description": "z方向位置"
+                                },
+                                "roll": {
+                                    "type": "Float",
+                                    "required": True,
+                                    "description": "方向角roll"
+                                },
+                                "yaw": {
+                                    "type": "Float",
+                                    "required": True,
+                                    "description": "方向角yaw"
+                                },
+                                "pitch": {
+                                    "type": "Float",
+                                    "required": True,
+                                    "description": "方向角pitch"
+                                }
+                            },
+                            "response": {
+                                "code": "String",
+                                "message": "String",
+                                "data": {
+                                    "status": "Bool"
+                                }
+                            }
+                        },
+                        "协作臂吸盘吸附": {
+                            "endpoint": "POST /robotic_control/collaborative_arm/set_adsorption",
+                            "description": "协作臂吸盘吸附控制",
+                            "parameters": {
+                                "value": {
+                                    "type": "Float",
+                                    "required": True,
+                                    "description": "吸力大小，范围(0,1)"
+                                }
+                            },
+                            "response": {
+                                "code": "String",
+                                "message": "String",
+                                "data": {
+                                    "status": "Bool"
+                                }
+                            }
+                        }
                     }
                 },
                 "usage_example": {
@@ -635,7 +895,7 @@ class HTTPNavigatorAgent:
                 error_msg = str(e)
                 self._log_api_call('/robotic_control/navigation/get_nav_state', 'GET', {}, False, f"异常: {error_msg}")
                 return jsonify({"success": False, "error": error_msg}), 500
-
+        
         # 位姿操作
         @self.app.route('/api/pose/init', methods=['POST'])
         def init_pose():
@@ -657,7 +917,6 @@ class HTTPNavigatorAgent:
                     quaternion.get('z', 0.0),
                     quaternion.get('w', 1.0)
                 )
-                
                 result = self.navigator.pose_init(trans_tuple, quat_tuple)
                 return jsonify({
                     "success": result,
@@ -851,14 +1110,37 @@ class HTTPNavigatorAgent:
         def autonomous_mapping():
             """自主建图"""
             try:
+                # 检查 Content-Type
+                if not request.is_json:
+                    return jsonify({
+                        "code": "000001",
+                        "message": "Content-Type must be application/json",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
+                
                 # 获取请求参数
                 data = request.get_json() or {}
+                self._log_api_call('/robotic_control/navigation/autonomous_mapping', 'POST', data)
                 
                 # 必需参数验证
                 if 'command' not in data:
-                    return jsonify({"success": False, "error": "缺少必需参数: command"}), 400
+                    return jsonify({
+                        "code": "000001",
+                        "message": "缺少必需参数: command",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
                 if 'save' not in data:
-                    return jsonify({"success": False, "error": "缺少必需参数: save"}), 400
+                    return jsonify({
+                        "code": "000001",
+                        "message": "缺少必需参数: save",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
                 
                 # 提取参数
                 command = data.get('command')  # 1表示开始，0表示终止
@@ -868,11 +1150,29 @@ class HTTPNavigatorAgent:
                 
                 # 参数验证
                 if command not in [0, 1]:
-                    return jsonify({"success": False, "error": "command参数必须为0或1"}), 400
+                    return jsonify({
+                        "code": "000001",
+                        "message": "command参数必须为0或1",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
                 if not isinstance(save, bool):
-                    return jsonify({"success": False, "error": "save参数必须为布尔值"}), 400
+                    return jsonify({
+                        "code": "000001",
+                        "message": "save参数必须为布尔值",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
                 if max_time_out <= 0:
-                    return jsonify({"success": False, "error": "max_time_out参数必须大于0"}), 400
+                    return jsonify({
+                        "code": "000001",
+                        "message": "max_time_out参数必须大于0",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
                 
                 # 记录参数
                 self.logger.info(f"自主建图参数: command={command}, save={save}, "
@@ -881,134 +1181,225 @@ class HTTPNavigatorAgent:
                 # 根据command参数执行相应操作
                 if command == 1:
                     # 开始自主建图
-                    self.navigator.start_mapping()
-                    message = "自主建图已开始"
-                    
-                    # 如果设置了超时时间，启动定时器自动关闭建图
-                    if max_time_out > 0:
-                        self.logger.info(f"设置建图超时时间: {max_time_out}秒")
+                    try:
+                        self.navigator.start_mapping()
+                        message = "自主建图已开始"
                         
-                        # 取消之前的超时线程（如果存在）
-                        if 'mapping_timeout' in self.timeout_threads:
-                            self.logger.info("取消之前的建图超时线程")
-                        
-                        # 启动后台线程来处理超时
-                        import threading
-                        def auto_stop_mapping():
-                            try:
-                                time.sleep(max_time_out)
-                                self.logger.info(f"建图超时时间到达({max_time_out}秒)，自动停止建图")
-                                
-                                # 停止建图
-                                self.navigator.end_mapping()
-                                
-                                # 如果需要保存地图
-                                if save:
-                                    try:
-                                        if save_path:
-                                            self.navigator.save_accumulated_cloud(save_path)
-                                        else:
-                                            self.navigator.save_accumulated_cloud("autonomous_mapping_result.pcd")
-                                        self.logger.info("超时停止建图后，地图已保存")
-                                    except Exception as save_error:
-                                        self.logger.error(f"超时停止建图后保存地图失败: {save_error}")
-                                
-                                # 清理超时线程记录
-                                if 'mapping_timeout' in self.timeout_threads:
-                                    del self.timeout_threads['mapping_timeout']
+                        # 如果设置了超时时间，启动定时器自动关闭建图
+                        if max_time_out > 0:
+                            self.logger.info(f"设置建图超时时间: {max_time_out}秒")
+                            
+                            # 取消之前的超时线程（如果存在）
+                            if 'mapping_timeout' in self.timeout_threads:
+                                self.logger.info("取消之前的建图超时线程")
+                            
+                            # 启动后台线程来处理超时
+                            import threading
+                            def auto_stop_mapping():
+                                try:
+                                    time.sleep(max_time_out)
+                                    self.logger.info(f"建图超时时间到达({max_time_out}秒)，自动停止建图")
                                     
-                            except Exception as e:
-                                self.logger.error(f"自动停止建图失败: {e}")
+                                    # 停止建图
+                                    self.navigator.end_mapping()
+                                    
+                                    # 如果需要保存地图
+                                    if save:
+                                        try:
+                                            if save_path:
+                                                self.navigator.save_accumulated_cloud(save_path)
+                                            else:
+                                                self.navigator.save_accumulated_cloud("autonomous_mapping_result.pcd")
+                                            self.logger.info("超时停止建图后，地图已保存")
+                                        except Exception as save_error:
+                                            self.logger.error(f"超时停止建图后保存地图失败: {save_error}")
+                                    
+                                    # 清理超时线程记录
+                                    if 'mapping_timeout' in self.timeout_threads:
+                                        del self.timeout_threads['mapping_timeout']
+                                        
+                                except Exception as e:
+                                    self.logger.error(f"自动停止建图失败: {e}")
+                            
+                            # 启动超时线程
+                            timeout_thread = threading.Thread(target=auto_stop_mapping, daemon=True)
+                            timeout_thread.start()
+                            
+                            # 记录超时线程
+                            self.timeout_threads['mapping_timeout'] = {
+                                'thread': timeout_thread,
+                                'start_time': time.time(),
+                                'timeout': max_time_out,
+                                'save': save,
+                                'save_path': save_path
+                            }
+                            
+                            message += f"，将在{max_time_out}秒后自动停止"
                         
-                        # 启动超时线程
-                        timeout_thread = threading.Thread(target=auto_stop_mapping, daemon=True)
-                        timeout_thread.start()
+                        # 记录成功日志
+                        self._log_api_call('/robotic_control/navigation/autonomous_mapping', 'POST', data, True, message)
                         
-                        # 记录超时线程
-                        self.timeout_threads['mapping_timeout'] = {
-                            'thread': timeout_thread,
-                            'start_time': time.time(),
-                            'timeout': max_time_out,
-                            'save': save,
-                            'save_path': save_path
-                        }
+                        return jsonify({
+                            "code": "000000",
+                            "message": message,
+                            "data": {
+                                "status": True
+                            }
+                        })
                         
-                        message += f"，将在{max_time_out}秒后自动停止"
+                    except Exception as e:
+                        error_msg = f"开始自主建图失败: {str(e)}"
+                        self.logger.error(error_msg)
+                        self._log_api_call('/robotic_control/navigation/autonomous_mapping', 'POST', data, False, error_msg)
+                        
+                        return jsonify({
+                            "code": "000002",
+                            "message": error_msg,
+                            "data": {
+                                "status": False
+                            }
+                        }), 500
                         
                 elif command == 0:
                     # 终止自主建图
-                    self.navigator.end_mapping()
-                    message = "自主建图已终止"
-                    
-                    # 取消超时线程（如果存在）
-                    if 'mapping_timeout' in self.timeout_threads:
-                        self.logger.info("手动停止建图，取消超时线程")
-                        del self.timeout_threads['mapping_timeout']
-                    
-                    # 如果需要保存地图
-                    if save:
-                        try:
-                            if save_path:
-                                # 使用指定路径保存
-                                self.navigator.save_accumulated_cloud(save_path)
-                            else:
-                                # 使用默认路径保存
-                                self.navigator.save_accumulated_cloud("autonomous_mapping_result.pcd")
-                            message += "，地图已保存"
-                        except Exception as save_error:
-                            self.logger.error(f"保存地图失败: {save_error}")
-                            message += "，但保存地图失败"
+                    try:
+                        self.navigator.end_mapping()
+                        message = "自主建图已终止"
+                        
+                        # 取消超时线程（如果存在）
+                        if 'mapping_timeout' in self.timeout_threads:
+                            self.logger.info("手动停止建图，取消超时线程")
+                            del self.timeout_threads['mapping_timeout']
+                        
+                        # 如果需要保存地图
+                        if save:
+                            try:
+                                if save_path:
+                                    # 使用指定路径保存
+                                    self.navigator.save_accumulated_cloud(save_path)
+                                else:
+                                    # 使用默认路径保存
+                                    self.navigator.save_accumulated_cloud("autonomous_mapping_result.pcd")
+                                message += "，地图已保存"
+                            except Exception as save_error:
+                                self.logger.error(f"保存地图失败: {save_error}")
+                                message += "，但保存地图失败"
+                        
+                        # 记录成功日志
+                        self._log_api_call('/robotic_control/navigation/autonomous_mapping', 'POST', data, True, message)
+                        
+                        return jsonify({
+                            "code": "000000",
+                            "message": message,
+                            "data": {
+                                "status": True
+                            }
+                        })
+                        
+                    except Exception as e:
+                        error_msg = f"终止自主建图失败: {str(e)}"
+                        self.logger.error(error_msg)
+                        self._log_api_call('/robotic_control/navigation/autonomous_mapping', 'POST', data, False, error_msg)
+                        
+                        return jsonify({
+                            "code": "000002",
+                            "message": error_msg,
+                            "data": {
+                                "status": False
+                            }
+                        }), 500
+                
+            except Exception as e:
+                error_msg = f"自主建图操作失败: {str(e)}"
+                self.logger.error(error_msg)
+                self._log_api_call('/robotic_control/navigation/autonomous_mapping', 'POST', data, False, error_msg)
                 
                 return jsonify({
-                    "success": True,
-                    "message": message,
-                    "parameters": {
-                        "command": command,
-                        "save": save,
-                        "save_path": save_path,
-                        "max_time_out": max_time_out
+                    "code": "000002",
+                    "message": error_msg,
+                    "data": {
+                        "status": False
                     }
-                })
-            except Exception as e:
-                self.logger.error(f"自主建图失败: {e}")
-                return jsonify({"success": False, "error": str(e)}), 500
+                }), 500
         
         # 定点导航
         @self.app.route('/robotic_control/navigation/fixed_point_nav', methods=['POST'])
         def fixed_point_navigation():
             """定点导航"""
             try:
+                # 检查 Content-Type
+                if not request.is_json:
+                    return jsonify({
+                        "code": "000001",
+                        "message": "Content-Type must be application/json",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
+                
                 # 获取请求参数
                 data = request.get_json() or {}
-                
+                self._log_api_call('/robotic_control/navigation/fixed_point_nav', 'POST', data)
                 
                 # 提取参数
                 goal_coordinates_data = data.get('goal_coordinates', {'x': 0.0, 'y': 0.0, 'yaw': 0.0})  # 目标点坐标
                 map_name = data.get('map', 'default')  # String 使用的地图名称
                 goal_node_id = data.get('goal_node_id', None)  # Int 目标点ID
                 
-                
                 # 参数验证
                 if not isinstance(goal_coordinates_data, dict):
-                    return jsonify({"success": False, "error": "goal_coordinates必须是对象格式"}), 400
+                    return jsonify({
+                        "code": "000001",
+                        "message": "goal_coordinates必须是对象格式",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
                 
                 try:
                     x = float(goal_coordinates_data.get('x', 0.0))
                     y = float(goal_coordinates_data.get('y', 0.0))
                     goal_yaw = float(goal_coordinates_data.get('yaw', 0.0))
                 except (ValueError, TypeError):
-                    return jsonify({"success": False, "error": "goal_coordinates中的坐标值必须是数字"}), 400
+                    return jsonify({
+                        "code": "000001",
+                        "message": "goal_coordinates中的坐标值必须是数字",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
                 
                 if not isinstance(goal_yaw, (int, float)):
-                    return jsonify({"success": False, "error": "goal_yaw必须是数字"}), 400
+                    return jsonify({
+                        "code": "000001",
+                        "message": "goal_yaw必须是数字",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
                 
                 # 记录参数
                 self.logger.info(f"定点导航参数: goal_coordinates=[{x}, {y}], map={map_name}, goal_yaw={goal_yaw}")
                 
                 # 获取当前位姿
-                current_pose = self.navigator.get_current_pose()
-                if current_pose is None:
-                    return jsonify({"success": False, "error": "无法获取当前位姿，请先初始化位姿"}), 400
+                try:
+                    current_pose = self.navigator.get_current_pose()
+                    if current_pose is None:
+                        return jsonify({
+                            "code": "000001",
+                            "message": "无法获取当前位姿，请先初始化位姿",
+                            "data": {
+                                "status": False
+                            }
+                        }), 400
+                except Exception as pose_error:
+                    return jsonify({
+                        "code": "000002",
+                        "message": f"获取当前位姿失败: {str(pose_error)}",
+                        "data": {
+                            "status": False
+                        }
+                    }), 500
                 
                 # 执行定点导航
                 try:
@@ -1025,50 +1416,200 @@ class HTTPNavigatorAgent:
                     if success:
                         message = f"定点导航已启动，目标点: ({x:.2f}, {y:.2f}), 目标点ID: {goal_node_id}, 目标角度: {goal_yaw:.2f}°"
                         self.logger.info(message)
+                        
+                        # 记录成功日志
+                        self._log_api_call('/robotic_control/navigation/fixed_point_nav', 'POST', data, True, message)
+                        
+                        return jsonify({
+                            "code": "000000",
+                            "message": message,
+                            "data": {
+                                "status": True
+                            }
+                        })
                     else:
-                        message = "定点导航启动失败"
-                        self.logger.error(message)
-                        return jsonify({"success": False, "error": message}), 500
+                        error_msg = "定点导航启动失败"
+                        self.logger.error(error_msg)
+                        self._log_api_call('/robotic_control/navigation/fixed_point_nav', 'POST', data, False, error_msg)
+                        
+                        return jsonify({
+                            "code": "000002",
+                            "message": error_msg,
+                            "data": {
+                                "status": False
+                            }
+                        }), 500
                         
                 except Exception as nav_error:
                     error_msg = f"导航执行失败: {str(nav_error)}"
                     self.logger.error(error_msg)
-                    return jsonify({"success": False, "error": error_msg}), 500
-                
-                return jsonify({
-                    "success": True,
-                    "message": message,
-                    "parameters": {
-                        "goal_coordinates": goal_coordinates_data,
-                        "map": map_name,
-                        "goal_yaw": goal_yaw,
-                        "current_pose": {
-                            "x": current_pose['position'][0],
-                            "y": current_pose['position'][1],
-                            "z": current_pose['position'][2],
-                            "yaw": current_pose['euler'][2]
+                    self._log_api_call('/robotic_control/navigation/fixed_point_nav', 'POST', data, False, error_msg)
+                    
+                    return jsonify({
+                        "code": "000002",
+                        "message": error_msg,
+                        "data": {
+                            "status": False
                         }
-                    }
-                })
+                    }), 500
                 
             except Exception as e:
-                self.logger.error(f"定点导航失败: {e}")
-                return jsonify({"success": False, "error": str(e)}), 500
+                error_msg = f"定点导航操作失败: {str(e)}"
+                self.logger.error(error_msg)
+                self._log_api_call('/robotic_control/navigation/fixed_point_nav', 'POST', data, False, error_msg)
+                
+                return jsonify({
+                    "code": "000002",
+                    "message": error_msg,
+                    "data": {
+                        "status": False
+                    }
+                }), 500
         
         @self.app.route('/robotic_control/navigation/go_home', methods=['POST'])
         def go_home():
             """一键返回"""
             try:
-                self.navigator.go_home()
-                return jsonify({"success": True, "message": "一键返回已启动"})
+                # 检查 Content-Type
+                if not request.is_json:
+                    return jsonify({
+                        "code": "000001",
+                        "message": "Content-Type must be application/json",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
+                
+                # 获取请求参数
+                data = request.get_json() or {}
+                self._log_api_call('/robotic_control/navigation/go_home', 'POST', data)
+                
+                # 提取参数
+                home_coordinates = data.get('home', None)  # List<Float> 导航图中的返航点
+                
+                # 参数验证（home参数是可选的）
+                if home_coordinates is not None:
+                    if not isinstance(home_coordinates, list):
+                        return jsonify({
+                            "code": "000001",
+                            "message": "home参数必须是数组格式",
+                            "data": {
+                                "status": False
+                            }
+                        }), 400
+                    
+                    # 验证数组中的元素都是数字
+                    try:
+                        if len(home_coordinates) >= 2:
+                            x = float(home_coordinates[0])
+                            y = float(home_coordinates[1])
+                            yaw = float(home_coordinates[2]) if len(home_coordinates) > 2 else 0.0
+                        else:
+                            return jsonify({
+                                "code": "000001",
+                                "message": "home参数至少需要包含x和y坐标",
+                                "data": {
+                                    "status": False
+                                }
+                            }), 400
+                    except (ValueError, TypeError):
+                        return jsonify({
+                            "code": "000001",
+                            "message": "home参数中的坐标值必须是数字",
+                            "data": {
+                                "status": False
+                            }
+                        }), 400
+                
+                # 记录参数
+                if home_coordinates:
+                    self.logger.info(f"返航参数: home={home_coordinates}")
+                else:
+                    self.logger.info("使用默认返航点")
+                
+                # 执行返航操作
+                try:
+                    if home_coordinates:
+                        # 如果设置了新的返航点，导航到指定位置
+                        success = self.navigator.navigate_to_point(
+                            x=x,
+                            y=y,
+                            yaw=yaw
+                        )
+                        if success:
+                            message = f"返航已启动，目标点: ({x:.2f}, {y:.2f}), 角度: {yaw:.2f}°"
+                        else:
+                            error_msg = "返航启动失败"
+                            self.logger.error(error_msg)
+                            self._log_api_call('/robotic_control/navigation/go_home', 'POST', data, False, error_msg)
+                            
+                            return jsonify({
+                                "code": "000002",
+                                "message": error_msg,
+                                "data": {
+                                    "status": False
+                                }
+                            }), 500
+                    else:
+                        # 使用默认返航点
+                        self.navigator.go_home()
+                        message = "返航已启动，使用默认返航点"
+                    
+                    # 记录成功日志
+                    self.logger.info(message)
+                    self._log_api_call('/robotic_control/navigation/go_home', 'POST', data, True, message)
+                    
+                    return jsonify({
+                        "code": "000000",
+                        "message": message,
+                        "data": {
+                            "status": True
+                        }
+                    })
+                    
+                except Exception as nav_error:
+                    error_msg = f"返航执行失败: {str(nav_error)}"
+                    self.logger.error(error_msg)
+                    self._log_api_call('/robotic_control/navigation/go_home', 'POST', data, False, error_msg)
+                    
+                    return jsonify({
+                        "code": "000002",
+                        "message": error_msg,
+                        "data": {
+                            "status": False
+                        }
+                    }), 500
+                
             except Exception as e:
-                return jsonify({"success": False, "error": str(e)}), 500
+                error_msg = f"返航操作失败: {str(e)}"
+                self.logger.error(error_msg)
+                self._log_api_call('/robotic_control/navigation/go_home', 'POST', data, False, error_msg)
+                
+                return jsonify({
+                    "code": "000002",
+                    "message": error_msg,
+                    "data": {
+                        "status": False
+                    }
+                }), 500
 
         @self.app.route('/robotic_control/navigation/set_auto_nav', methods=['POST'])
         def set_auto_nav():
             """设置自动导航"""
             try:
+                # 检查 Content-Type
+                if not request.is_json:
+                    return jsonify({
+                        "code": "000001",
+                        "message": "Content-Type must be application/json",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
+                
+                # 获取请求参数
                 data = request.get_json() or {}
+                self._log_api_call('/robotic_control/navigation/set_auto_nav', 'POST', data)
                 
                 # 提取参数
                 map_name = data.get('map', 'default')  # String 使用的导航地图
@@ -1076,30 +1617,119 @@ class HTTPNavigatorAgent:
                 path_point = data.get('path_point', [])  # List<Float> 设置的巡逻路径点
                 
                 # 参数验证
-                if not isinstance(area, list):
-                    return jsonify({"success": False, "error": "area参数必须是数组"}), 400
+                if map_name is not None and not isinstance(map_name, str):
+                    return jsonify({
+                        "code": "000001",
+                        "message": "map参数必须是字符串类型",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
                 
-                if not isinstance(path_point, list):
-                    return jsonify({"success": False, "error": "path_point参数必须是数组"}), 400
+                if area is not None and not isinstance(area, list):
+                    return jsonify({
+                        "code": "000001",
+                        "message": "area参数必须是数组格式",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
+                
+                if path_point is not None and not isinstance(path_point, list):
+                    return jsonify({
+                        "code": "000001",
+                        "message": "path_point参数必须是数组格式",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
+                
+                # 验证数组中的元素都是数字（如果提供了数组）
+                if area:
+                    try:
+                        for i, value in enumerate(area):
+                            float(value)
+                    except (ValueError, TypeError):
+                        return jsonify({
+                            "code": "000001",
+                            "message": f"area参数第{i+1}个元素必须是数字类型",
+                            "data": {
+                                "status": False
+                            }
+                        }), 400
+                
+                if path_point:
+                    try:
+                        for i, value in enumerate(path_point):
+                            float(value)
+                    except (ValueError, TypeError):
+                        return jsonify({
+                            "code": "000001",
+                            "message": f"path_point参数第{i+1}个元素必须是数字类型",
+                            "data": {
+                                "status": False
+                            }
+                        }), 400
                 
                 # 记录参数
                 self.logger.info(f"设置自动导航参数: map={map_name}, area={area}, path_point={path_point}")
                 
                 # 调用navigator方法设置自动导航
-                result = self.navigator.set_auto_nav(map_name=map_name, area=area, path_point=path_point)
+                try:
+                    result = self.navigator.set_auto_nav(map_name=map_name, area=area, path_point=path_point)
+                    
+                    if result:
+                        message = "自动导航参数设置成功"
+                        self.logger.info(message)
+                        
+                        # 记录成功日志
+                        self._log_api_call('/robotic_control/navigation/set_auto_nav', 'POST', data, True, message)
+                        
+                        return jsonify({
+                            "code": "000000",
+                            "message": message,
+                            "data": {
+                                "status": True
+                            }
+                        })
+                    else:
+                        error_msg = "自动导航参数设置失败"
+                        self.logger.error(error_msg)
+                        self._log_api_call('/robotic_control/navigation/set_auto_nav', 'POST', data, False, error_msg)
+                        
+                        return jsonify({
+                            "code": "000002",
+                            "message": error_msg,
+                            "data": {
+                                "status": False
+                            }
+                        }), 500
+                        
+                except Exception as nav_error:
+                    error_msg = f"自动导航设置执行失败: {str(nav_error)}"
+                    self.logger.error(error_msg)
+                    self._log_api_call('/robotic_control/navigation/set_auto_nav', 'POST', data, False, error_msg)
+                    
+                    return jsonify({
+                        "code": "000002",
+                        "message": error_msg,
+                        "data": {
+                            "status": False
+                        }
+                    }), 500
+                
+            except Exception as e:
+                error_msg = f"设置自动导航操作失败: {str(e)}"
+                self.logger.error(error_msg)
+                self._log_api_call('/robotic_control/navigation/set_auto_nav', 'POST', data, False, error_msg)
                 
                 return jsonify({
-                    "success": result,
-                    "message": "自动导航参数设置成功" if result else "自动导航参数设置失败",
-                    "parameters": {
-                        "map": map_name,
-                        "area": area,
-                        "path_point": path_point
+                    "code": "000002",
+                    "message": error_msg,
+                    "data": {
+                        "status": False
                     }
-                })
-            except Exception as e:
-                self.logger.error(f"设置自动导航失败: {e}")
-                return jsonify({"success": False, "error": str(e)}), 500
+                }), 500
 
         # ==================== 节点和边管理扩展功能 ====================
         
@@ -1588,6 +2218,777 @@ class HTTPNavigatorAgent:
             except Exception as e:
                 return jsonify({"success": False, "error": str(e)}), 500
     
+        # 机械臂api
+        @self.app.route('/robotic_control/robotic_arm/get_pose', methods=['POST'])
+        def get_robotic_arm_pose():
+            """获取机械臂末端位姿"""
+            try:
+                self._log_api_call('/robotic_control/robotic_arm/get_pose', 'POST')
+                
+                # 获取机械臂末端位姿
+                arm_pose = {}
+                
+                # 返回成功响应
+                return jsonify({
+                    "code": "000000",
+                    "message": "机械臂位姿获取成功",
+                    "data": {
+                        "status": True,
+                        "x": arm_pose.get('x', 0.0),
+                        "y": arm_pose.get('y', 0.0),
+                        "z": arm_pose.get('z', 0.0),
+                        "roll": arm_pose.get('roll', 0.0),
+                        "yaw": arm_pose.get('yaw', 0.0),
+                        "pitch": arm_pose.get('pitch', 0.0)
+                    }
+                })
+                
+            except Exception as e:
+                error_msg = str(e)
+                self._log_api_call('/robotic_control/robotic_arm/get_pose', 'POST', {}, False, f"异常: {error_msg}")
+                return jsonify({
+                    "code": "000002",
+                    "message": f"获取机械臂位姿失败: {error_msg}",
+                    "data": {
+                        "status": False,
+                        "x": 0.0,
+                        "y": 0.0,
+                        "z": 0.0,
+                        "roll": 0.0,
+                        "yaw": 0.0,
+                        "pitch": 0.0
+                    }
+                }), 500
+
+        @self.app.route('/robotic_control/robotic_arm/go_home', methods=['POST'])
+        def robotic_arm_go_home():
+            """机械臂返回默认位置"""
+            try:
+                self._log_api_call('/robotic_control/robotic_arm/go_home', 'POST')
+                
+                # TODO: 实现机械臂返回默认位置的具体逻辑
+                # 这里应该调用实际的机械臂控制接口
+                
+                # 返回成功响应
+                return jsonify({
+                    "code": "000000",
+                    "message": "机械臂返回默认位置成功",
+                    "data": {
+                        "status": True
+                    }
+                })
+                
+            except Exception as e:
+                error_msg = str(e)
+                self._log_api_call('/robotic_control/robotic_arm/go_home', 'POST', {}, False, f"异常: {error_msg}")
+                return jsonify({
+                    "code": "000002",
+                    "message": f"机械臂返回默认位置失败: {error_msg}",
+                    "data": {
+                        "status": False
+                    }
+                }), 500
+
+        @self.app.route('/robotic_control/open_door', methods=['POST'])
+        def robotic_arm_open_door():
+            """机械臂开关门"""
+            try:
+                # 检查 Content-Type
+                if not request.is_json:
+                    return jsonify({
+                        "code": "000001",
+                        "message": "Content-Type must be application/json",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
+                
+                data = request.get_json() or {}
+                self._log_api_call('/robotic_control/open_door', 'POST', data)
+                
+                # 获取必需参数
+                open_door = data.get('open')
+                direction = data.get('direction')
+                
+                # 参数验证
+                if open_door is None:
+                    return jsonify({
+                        "code": "000001",
+                        "message": "缺少必需参数: open",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
+                
+                if direction is None:
+                    return jsonify({
+                        "code": "000001",
+                        "message": "缺少必需参数: direction",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
+                
+                # 验证参数类型和值
+                if not isinstance(open_door, bool):
+                    return jsonify({
+                        "code": "000001",
+                        "message": "open参数必须是布尔值",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
+                
+                if not isinstance(direction, str) or direction not in ['left', 'right']:
+                    return jsonify({
+                        "code": "000001",
+                        "message": "direction参数必须是字符串，且值为'left'或'right'",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
+                
+                # TODO: 实现机械臂开关门的具体逻辑
+                # 这里应该调用实际的机械臂控制接口
+                # 根据open_door和direction参数执行相应的开关门动作
+                
+                action = "开门" if open_door else "关门"
+                message = f"机械臂{direction}方向{action}任务执行成功"
+                
+                # 返回成功响应
+                return jsonify({
+                    "code": "000000",
+                    "message": message,
+                    "data": {
+                        "status": True
+                    }
+                })
+                
+            except Exception as e:
+                error_msg = str(e)
+                self._log_api_call('/robotic_control/open_door', 'POST', data, False, f"异常: {error_msg}")
+                return jsonify({
+                    "code": "000002",
+                    "message": f"机械臂开关门失败: {error_msg}",
+                    "data": {
+                        "status": False
+                    }
+                }), 500
+
+        @self.app.route('/robotic_control/robotic_arm/move_to', methods=['POST'])
+        def robotic_arm_move_to():
+            """机械臂移动到指定位置"""
+            try:
+                # 检查 Content-Type
+                if not request.is_json:
+                    return jsonify({
+                        "code": "000001",
+                        "message": "Content-Type must be application/json",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
+                
+                data = request.get_json() or {}
+                self._log_api_call('/robotic_control/robotic_arm/move_to', 'POST', data)
+                
+                # 获取必需参数
+                x = data.get('x')
+                y = data.get('y')
+                z = data.get('z')
+                roll = data.get('roll')
+                yaw = data.get('yaw')
+                pitch = data.get('pitch')
+                
+                # 参数验证
+                required_params = {
+                    'x': x,
+                    'y': y,
+                    'z': z,
+                    'roll': roll,
+                    'yaw': yaw,
+                    'pitch': pitch
+                }
+                
+                missing_params = []
+                invalid_params = []
+                
+                for param_name, param_value in required_params.items():
+                    if param_value is None:
+                        missing_params.append(param_name)
+                    elif not isinstance(param_value, (int, float)):
+                        invalid_params.append(f"{param_name}必须是数字类型")
+                
+                # 返回参数错误信息
+                if missing_params:
+                    return jsonify({
+                        "code": "000001",
+                        "message": f"缺少必需参数: {', '.join(missing_params)}",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
+                
+                if invalid_params:
+                    return jsonify({
+                        "code": "000001",
+                        "message": f"参数类型错误: {'; '.join(invalid_params)}",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
+                
+                # 转换为浮点数
+                try:
+                    x = float(x)
+                    y = float(y)
+                    z = float(z)
+                    roll = float(roll)
+                    yaw = float(yaw)
+                    pitch = float(pitch)
+                except (ValueError, TypeError):
+                    return jsonify({
+                        "code": "000001",
+                        "message": "坐标参数无法转换为数字",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
+                
+                # TODO: 实现机械臂移动到指定位置的具体逻辑
+                # 这里应该调用实际的机械臂控制接口
+                # 根据x, y, z, roll, yaw, pitch参数执行机械臂移动
+                
+                # 返回成功响应
+                return jsonify({
+                    "code": "000000",
+                    "message": "机械臂移动到指定位置成功",
+                    "data": {
+                        "status": True
+                    }
+                })
+                
+            except Exception as e:
+                error_msg = str(e)
+                self._log_api_call('/robotic_control/robotic_arm/move_to', 'POST', data, False, f"异常: {error_msg}")
+                return jsonify({
+                    "code": "000002",
+                    "message": f"机械臂移动到指定位置失败: {error_msg}",
+                    "data": {
+                        "status": False
+                    }
+                }), 500
+
+        @self.app.route('/robotic_control/robotic_arm/ee_move_to', methods=['POST'])
+        def robotic_arm_ee_move_to():
+            """机械臂末端移动到指定位置"""
+            try:
+                # 检查 Content-Type
+                if not request.is_json:
+                    return jsonify({
+                        "code": "000001",
+                        "message": "Content-Type must be application/json",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
+                
+                data = request.get_json() or {}
+                self._log_api_call('/robotic_control/robotic_arm/ee_move_to', 'POST', data)
+                
+                # 获取必需参数
+                x = data.get('x')
+                y = data.get('y')
+                z = data.get('z')
+                roll = data.get('roll')
+                yaw = data.get('yaw')
+                pitch = data.get('pitch')
+                
+                # 参数验证
+                required_params = {
+                    'x': x,
+                    'y': y,
+                    'z': z,
+                    'roll': roll,
+                    'yaw': yaw,
+                    'pitch': pitch
+                }
+                
+                missing_params = []
+                invalid_params = []
+                
+                for param_name, param_value in required_params.items():
+                    if param_value is None:
+                        missing_params.append(param_name)
+                    elif not isinstance(param_value, (int, float)):
+                        invalid_params.append(f"{param_name}必须是数字类型")
+                
+                # 返回参数错误信息
+                if missing_params:
+                    return jsonify({
+                        "code": "000001",
+                        "message": f"缺少必需参数: {', '.join(missing_params)}",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
+                
+                if invalid_params:
+                    return jsonify({
+                        "code": "000001",
+                        "message": f"参数类型错误: {'; '.join(invalid_params)}",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
+                
+                # 转换为浮点数
+                try:
+                    x = float(x)
+                    y = float(y)
+                    z = float(z)
+                    roll = float(roll)
+                    yaw = float(yaw)
+                    pitch = float(pitch)
+                except (ValueError, TypeError):
+                    return jsonify({
+                        "code": "000001",
+                        "message": "坐标参数无法转换为数字",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
+                
+                # TODO: 实现机械臂末端移动到指定位置的具体逻辑
+                # 这里应该调用实际的机械臂控制接口
+                # 根据x, y, z, roll, yaw, pitch参数执行机械臂末端移动
+                # 注意：仅移动末端关节，保持除末端以外的关节不变，用于微调位姿
+                
+                # 返回成功响应
+                return jsonify({
+                    "code": "000000",
+                    "message": "机械臂末端移动到指定位置成功",
+                    "data": {
+                        "status": True
+                    }
+                })
+                
+            except Exception as e:
+                error_msg = str(e)
+                self._log_api_call('/robotic_control/robotic_arm/ee_move_to', 'POST', data, False, f"异常: {error_msg}")
+                return jsonify({
+                    "code": "000002",
+                    "message": f"机械臂末端移动到指定位置失败: {error_msg}",
+                    "data": {
+                        "status": False
+                    }
+                }), 500
+
+        @self.app.route('/robotic_control/robotic_arm/get_camera', methods=['POST'])
+        def robotic_arm_get_camera():
+            """机械臂末端相机获取"""
+            try:
+                # 检查 Content-Type
+                if not request.is_json:
+                    return jsonify({
+                        "code": "000001",
+                        "message": "Content-Type must be application/json",
+                        "data": {
+                            "status": False,
+                            "images": []
+                        }
+                    }), 400
+                
+                data = request.get_json() or {}
+                self._log_api_call('/robotic_control/robotic_arm/get_camera', 'POST', data)
+                
+                # 获取可选参数
+                rgb = data.get('rgb', False)
+                depth = data.get('depth', False)
+                
+                # 参数验证
+                if not isinstance(rgb, bool):
+                    return jsonify({
+                        "code": "000001",
+                        "message": "rgb参数必须是布尔值",
+                        "data": {
+                            "status": False,
+                            "images": []
+                        }
+                    }), 400
+                
+                if not isinstance(depth, bool):
+                    return jsonify({
+                        "code": "000001",
+                        "message": "depth参数必须是布尔值",
+                        "data": {
+                            "status": False,
+                            "images": []
+                        }
+                    }), 400
+                
+                # 检查是否至少需要一种图像类型
+                if not rgb and not depth:
+                    return jsonify({
+                        "code": "000001",
+                        "message": "至少需要指定一种图像类型：rgb或depth",
+                        "data": {
+                            "status": False,
+                            "images": []
+                        }
+                    }), 400
+                
+                # TODO: 实现机械臂末端相机获取的具体逻辑
+                # 这里应该调用实际的机械臂相机接口
+                # 根据rgb和depth参数获取相应的图像数据
+                
+                # 模拟返回的图像列表
+                images = []
+                if rgb:
+                    images.append({
+                        "type": "rgb",
+                        "data": "base64_encoded_rgb_image_data",
+                        "timestamp": time.time()
+                    })
+                
+                if depth:
+                    images.append({
+                        "type": "depth",
+                        "data": "base64_encoded_depth_image_data",
+                        "timestamp": time.time()
+                    })
+                
+                # 返回成功响应
+                return jsonify({
+                    "code": "000000",
+                    "message": "机械臂末端相机获取成功",
+                    "data": {
+                        "status": True,
+                        "images": images
+                    }
+                })
+                
+            except Exception as e:
+                error_msg = str(e)
+                self._log_api_call('/robotic_control/robotic_arm/get_camera', 'POST', data, False, f"异常: {error_msg}")
+                return jsonify({
+                    "code": "000002",
+                    "message": f"机械臂末端相机获取失败: {error_msg}",
+                    "data": {
+                        "status": False,
+                        "images": []
+                    }
+                }), 500
+
+        @self.app.route('/robotic_control/robotic_arm/set_gripper', methods=['POST'])
+        def robotic_arm_set_gripper():
+            """机械臂夹爪开合"""
+            try:
+                # 检查 Content-Type
+                if not request.is_json:
+                    return jsonify({
+                        "code": "000001",
+                        "message": "Content-Type must be application/json",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
+                
+                data = request.get_json() or {}
+                self._log_api_call('/robotic_control/robotic_arm/set_gripper', 'POST', data)
+                
+                # 获取必需参数
+                value = data.get('value')
+                
+                # 参数验证
+                if value is None:
+                    return jsonify({
+                        "code": "000001",
+                        "message": "缺少必需参数: value",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
+                
+                # 验证参数类型
+                if not isinstance(value, (int, float)):
+                    return jsonify({
+                        "code": "000001",
+                        "message": "value参数必须是数字类型",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
+                
+                # 转换为浮点数并验证范围
+                try:
+                    value = float(value)
+                except (ValueError, TypeError):
+                    return jsonify({
+                        "code": "000001",
+                        "message": "value参数无法转换为数字",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
+                
+                # 验证范围 (0,1)
+                if value <= 0 or value >= 1:
+                    return jsonify({
+                        "code": "000001",
+                        "message": "value参数必须在范围(0,1)内",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
+                
+                # TODO: 实现机械臂夹爪开合的具体逻辑
+                # 这里应该调用实际的机械臂夹爪控制接口
+                # 根据value参数控制夹爪的开合角度
+                
+                # 返回成功响应
+                return jsonify({
+                    "code": "000000",
+                    "message": "机械臂夹爪开合成功",
+                    "data": {
+                        "status": True
+                    }
+                })
+                
+            except Exception as e:
+                error_msg = str(e)
+                self._log_api_call('/robotic_control/robotic_arm/set_gripper', 'POST', data, False, f"异常: {error_msg}")
+                return jsonify({
+                    "code": "000002",
+                    "message": f"机械臂夹爪开合失败: {error_msg}",
+                    "data": {
+                        "status": False
+                    }
+                }), 500
+
+        @self.app.route('/robotic_control/collaborative_arm/go_home', methods=['POST'])
+        def collaborative_arm_go_home():
+            """协作臂返回默认位置"""
+            try:
+                self._log_api_call('/robotic_control/collaborative_arm/go_home', 'POST')
+                
+                # TODO: 实现协作臂返回默认位置的具体逻辑
+                # 这里应该调用实际的协作臂控制接口
+                # 控制机器狗末端协作臂返回默认位置
+                
+                # 返回成功响应
+                return jsonify({
+                    "code": "000000",
+                    "message": "协作臂返回默认位置成功",
+                    "data": {
+                        "status": True
+                    }
+                })
+                
+            except Exception as e:
+                error_msg = str(e)
+                self._log_api_call('/robotic_control/collaborative_arm/go_home', 'POST', {}, False, f"异常: {error_msg}")
+                return jsonify({
+                    "code": "000002",
+                    "message": f"协作臂返回默认位置失败: {error_msg}",
+                    "data": {
+                        "status": False
+                    }
+                }), 500
+
+        @self.app.route('/robotic_control/collaborative_arm/move_to', methods=['POST'])
+        def collaborative_arm_move_to():
+            """协作臂移动到指定位置"""
+            try:
+                # 检查 Content-Type
+                if not request.is_json:
+                    return jsonify({
+                        "code": "000001",
+                        "message": "Content-Type must be application/json",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
+                
+                data = request.get_json() or {}
+                self._log_api_call('/robotic_control/collaborative_arm/move_to', 'POST', data)
+                
+                # 获取必需参数
+                x = data.get('x')
+                y = data.get('y')
+                z = data.get('z')
+                roll = data.get('roll')
+                yaw = data.get('yaw')
+                pitch = data.get('pitch')
+                
+                # 参数验证
+                required_params = {
+                    'x': x,
+                    'y': y,
+                    'z': z,
+                    'roll': roll,
+                    'yaw': yaw,
+                    'pitch': pitch
+                }
+                
+                missing_params = []
+                invalid_params = []
+                
+                for param_name, param_value in required_params.items():
+                    if param_value is None:
+                        missing_params.append(param_name)
+                    elif not isinstance(param_value, (int, float)):
+                        invalid_params.append(f"{param_name}必须是数字类型")
+                
+                # 返回参数错误信息
+                if missing_params:
+                    return jsonify({
+                        "code": "000001",
+                        "message": f"缺少必需参数: {', '.join(missing_params)}",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
+                
+                if invalid_params:
+                    return jsonify({
+                        "code": "000001",
+                        "message": f"参数类型错误: {'; '.join(invalid_params)}",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
+                
+                # 转换为浮点数
+                try:
+                    x = float(x)
+                    y = float(y)
+                    z = float(z)
+                    roll = float(roll)
+                    yaw = float(yaw)
+                    pitch = float(pitch)
+                except (ValueError, TypeError):
+                    return jsonify({
+                        "code": "000001",
+                        "message": "坐标参数无法转换为数字",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
+                
+                # TODO: 实现协作臂移动到指定位置的具体逻辑
+                # 这里应该调用实际的协作臂控制接口
+                # 根据x, y, z, roll, yaw, pitch参数执行协作臂移动
+                # 注意：协作臂通常具有安全特性和人机协作功能
+                
+                # 返回成功响应
+                return jsonify({
+                    "code": "000000",
+                    "message": "协作臂移动到指定位置成功",
+                    "data": {
+                        "status": True
+                    }
+                })
+                
+            except Exception as e:
+                error_msg = str(e)
+                self._log_api_call('/robotic_control/collaborative_arm/move_to', 'POST', data, False, f"异常: {error_msg}")
+                return jsonify({
+                    "code": "000002",
+                    "message": f"协作臂移动到指定位置失败: {error_msg}",
+                    "data": {
+                        "status": False
+                    }
+                }), 500
+
+        @self.app.route('/robotic_control/collaborative_arm/set_adsorption', methods=['POST'])
+        def collaborative_arm_set_adsorption():
+            """协作臂吸盘吸附"""
+            try:
+                # 检查 Content-Type
+                if not request.is_json:
+                    return jsonify({
+                        "code": "000001",
+                        "message": "Content-Type must be application/json",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
+                
+                data = request.get_json() or {}
+                self._log_api_call('/robotic_control/collaborative_arm/set_adsorption', 'POST', data)
+                
+                # 获取必需参数
+                value = data.get('value')
+                
+                # 参数验证
+                if value is None:
+                    return jsonify({
+                        "code": "000001",
+                        "message": "缺少必需参数: value",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
+                
+                # 验证参数类型
+                if not isinstance(value, (int, float)):
+                    return jsonify({
+                        "code": "000001",
+                        "message": "value参数必须是数字类型",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
+                
+                # 转换为浮点数并验证范围
+                try:
+                    value = float(value)
+                except (ValueError, TypeError):
+                    return jsonify({
+                        "code": "000001",
+                        "message": "value参数无法转换为数字",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
+                
+                # 验证范围 (0,1)
+                if value <= 0 or value >= 1:
+                    return jsonify({
+                        "code": "000001",
+                        "message": "value参数必须在范围(0,1)内",
+                        "data": {
+                            "status": False
+                        }
+                    }), 400
+                
+                # TODO: 实现协作臂吸盘吸附的具体逻辑
+                # 这里应该调用实际的协作臂吸盘控制接口
+                # 根据value参数控制吸盘的吸力大小
+                # 注意：value为0表示无吸力，value为1表示最大吸力
+                
+                # 返回成功响应
+                return jsonify({
+                    "code": "000000",
+                    "message": "协作臂吸盘吸附设置成功",
+                    "data": {
+                        "status": True
+                    }
+                })
+                
+            except Exception as e:
+                error_msg = str(e)
+                self._log_api_call('/robotic_control/collaborative_arm/set_adsorption', 'POST', data, False, f"异常: {error_msg}")
+                return jsonify({
+                    "code": "000002",
+                    "message": f"协作臂吸盘吸附设置失败: {error_msg}",
+                    "data": {
+                        "status": False
+                    }
+                }), 500
+
+
     def _start_ros_thread(self):
         """启动ROS2 spin线程"""
         self.logger.info("启动ROS2 spin线程")
